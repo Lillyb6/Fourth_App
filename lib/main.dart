@@ -22,8 +22,8 @@ class MyApp extends StatelessWidget {
     title: 'HabitApp',
     debugShowCheckedModeBanner: false,
     theme: ThemeData(
-      colorScheme: ColorScheme.fromSeed(seedColor: const Color(0xff326b54)),
-      scaffoldBackgroundColor: const Color(0xfff6f7f2),
+      colorScheme: ColorScheme.fromSeed(seedColor: const Color(0xff3569b0)),
+      scaffoldBackgroundColor: const Color(0xfff3f6fc),
       useMaterial3: true,
       inputDecorationTheme: const InputDecorationTheme(
         border: OutlineInputBorder(),
