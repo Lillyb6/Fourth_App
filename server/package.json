@@ -1,0 +1,9 @@
+{
+  "name": "habitapp-api",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "engines": { "node": ">=24.0.0" },
+  "scripts": { "start": "node src/index.js", "dev": "node --watch src/index.js", "test": "node --test" },
+  "dependencies": { "express": "^5.1.0", "express-rate-limit": "^8.1.0", "helmet": "^8.1.0" }
+}
