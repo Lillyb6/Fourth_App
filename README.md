@@ -1,17 +1,73 @@
-# fourthapp
+# HabitApp
 
-A new Flutter project.
+Flutter habit tracker with an Express REST API and SQLite storage.
 
-## Getting Started
+## Run the connected Android app
 
-This project is a starting point for a Flutter application.
+Start the backend in a terminal and keep it running:
 
-A few resources to get you started if this is your first Flutter project:
+```powershell
+cd server
+npm.cmd ci
+npm.cmd start
+```
 
-- [Learn Flutter](https://docs.flutter.dev/get-started/learn-flutter)
-- [Write your first Flutter app](https://docs.flutter.dev/get-started/codelab)
-- [Flutter learning resources](https://docs.flutter.dev/reference/learning-resources)
+From the repository root in another terminal, start an Android emulator, then:
 
-For help getting started with Flutter development, view the
-[online documentation](https://docs.flutter.dev/), which offers tutorials,
-samples, guidance on mobile development, and a full API reference.
+```powershell
+flutter pub get
+flutter run
+```
+
+The Android emulator connects to the computer at `http://10.0.2.2:3000`.
+Sign up with an email and a password of 12–128 characters. Create habits,
+check in, undo a check-in, and use the refresh button to load current data.
+Habit history is loaded from the API. The logout button revokes the session.
+
+Habits and accounts persist in `server/data/habitapp.sqlite`. Keep this file
+when restarting the server. Login tokens stay in app memory for now: after a
+full app restart, sign in again to retrieve your saved habits. Passwords and
+tokens are not written to Flutter preferences or source files.
+
+## Server address
+
+Override the API URL when running against another server:
+
+```powershell
+flutter run --dart-define=API_BASE_URL=https://your-api.example.com
+```
+
+Windows development defaults to `http://127.0.0.1:3000`. Android debug builds
+permit local HTTP only for `10.0.2.2`, `127.0.0.1`, and `localhost`.
+For an Android phone connected over USB, forward its local port:
+
+```powershell
+adb reverse tcp:3000 tcp:3000
+flutter run --dart-define=API_BASE_URL=http://127.0.0.1:3000
+```
+
+Release builds require an explicit HTTPS API URL. Flutter web is not configured
+yet: the backend needs an explicit CORS allowlist for the web app's origin.
+iOS/macOS local networking has not been configured or verified in this milestone.
+
+## Verification
+
+```powershell
+flutter analyze
+flutter test
+flutter test test/api_live_test.dart --dart-define=RUN_LIVE_API_TEST=true
+cd server
+npm.cmd test
+```
+
+The live test requires Node.js 24+ and `npm.cmd ci` in `server`. It launches
+an isolated API on an ephemeral local port and removes its temporary database.
+It verifies registration, habit creation, check-in, logout/login, persistent
+history, and undo through the actual Flutter HTTP client.
+
+API and widget tests cover failed writes, session expiry, retry, and navigation.
+Errors remain visible for retry; failed check-ins do not change local completion.
+Accounts and habit data are removed from the navigation stack on logout or
+expired sessions. Group features are still a placeholder.
+
+See [server/README.md](server/README.md) for endpoint details.
