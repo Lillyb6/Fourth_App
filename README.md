@@ -68,6 +68,8 @@ history, and undo through the actual Flutter HTTP client.
 API and widget tests cover failed writes, session expiry, retry, and navigation.
 Errors remain visible for retry; failed check-ins do not change local completion.
 Accounts and habit data are removed from the navigation stack on logout or
-expired sessions. Group features are still a placeholder.
+expired sessions. The Accountability tab can create groups with an editable
+generated invite code and submit join requests for owner approval. Group lists,
+approval controls, progress, and sharing controls still need frontend integration.
 
 See [server/README.md](server/README.md) for endpoint details.

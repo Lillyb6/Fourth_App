@@ -56,6 +56,17 @@ void main() {
           completed: false,
         );
         expect((await second.habits()).single.checkIns, isEmpty);
+        final inviteCode = await second.createGroup('Reading circle', 'read1234');
+        expect(inviteCode, 'READ1234');
+        await first.authenticate(
+          'group-member@example.com',
+          'local-test-password',
+          register: true,
+        );
+        await first.requestToJoinGroup(inviteCode.toLowerCase());
+        // Repeating a pending request is also a successful response.
+        await first.requestToJoinGroup(inviteCode);
+        await first.logout();
         await second.logout();
       } finally {
         first?.dispose();

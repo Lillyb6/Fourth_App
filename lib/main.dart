@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 
 import 'api.dart';
+import 'accountability_screen.dart';
 import 'auth_screen.dart';
 
 void main() => runApp(const MyApp());
@@ -156,7 +157,7 @@ class _HabitHomeState extends State<HabitHome> {
         child: ConstrainedBox(
           constraints: const BoxConstraints(maxWidth: 760),
           child: selectedPage == 1
-              ? const AccountabilityScreen()
+              ? AccountabilityScreen(api: widget.api)
               : loading
               ? const Center(child: CircularProgressIndicator())
               : loadError != null
@@ -547,50 +548,4 @@ class _HabitDetailsScreenState extends State<HabitDetailsScreen> {
       ),
     );
   }
-}
-
-class AccountabilityScreen extends StatelessWidget {
-  const AccountabilityScreen({super.key});
-  @override
-  Widget build(BuildContext context) => ListView(
-    padding: const EdgeInsets.all(24),
-    children: [
-      Text('Grow together', style: Theme.of(context).textTheme.headlineMedium),
-      const SizedBox(height: 8),
-      const Text('A little encouragement can make a big difference.'),
-      const SizedBox(height: 24),
-      const Card(
-        child: Padding(
-          padding: EdgeInsets.all(28),
-          child: Column(
-            children: [
-              Icon(Icons.people_outline, size: 56),
-              SizedBox(height: 16),
-              Text('Your accountability circle'),
-              SizedBox(height: 12),
-              Text(
-                'Create a group or join friends to celebrate consistent progress.',
-                textAlign: TextAlign.center,
-              ),
-              SizedBox(height: 20),
-              OutlinedButton(onPressed: null, child: Text('Create a group')),
-              OutlinedButton(onPressed: null, child: Text('Join with a code')),
-              SizedBox(height: 12),
-              Text(
-                'Accountability groups are coming next. Your habits are private.',
-                textAlign: TextAlign.center,
-              ),
-            ],
-          ),
-        ),
-      ),
-      const ListTile(
-        leading: Icon(Icons.shield_outlined),
-        title: Text('You control what you share'),
-        subtitle: Text(
-          'Habit details stay private unless you choose to share them.',
-        ),
-      ),
-    ],
-  );
 }

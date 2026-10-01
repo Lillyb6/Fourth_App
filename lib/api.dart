@@ -145,6 +145,26 @@ class HabitApi extends ChangeNotifier {
     notifyListeners();
   }
 
+  Future<String> createGroup(String name, String inviteCode) async {
+    final data = await _request(
+      'POST',
+      '/api/groups',
+      body: {
+        'name': name.trim(),
+        'inviteCode': inviteCode.trim().toUpperCase(),
+      },
+    );
+    return (data['group'] as Map<String, dynamic>)['inviteCode'] as String;
+  }
+
+  Future<void> requestToJoinGroup(String inviteCode) async {
+    await _request(
+      'POST',
+      '/api/groups/join',
+      body: {'inviteCode': inviteCode.trim().toUpperCase()},
+    );
+  }
+
   Future<List<Habit>> habits() async =>
       ((await _request('GET', '/api/habits'))['habits'] as List)
           .map((value) => Habit.fromJson(value as Map<String, dynamic>))
