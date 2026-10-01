@@ -1,7 +1,7 @@
 # HabitApp REST API
 
 First backend milestone: accounts, private habits, and persistent daily check-ins.
-The Flutter screens are not connected yet. Groups, sharing, streak calculations,
+The Flutter screens are not connected yet. Group leaving, sharing, streak calculations,
 email verification, and password reset are future milestones.
 
 ## Run locally
@@ -40,6 +40,8 @@ scrypt and random salts; only token hashes are stored in SQLite.
 | POST | `/api/auth/login` | Sign in with email and password |
 | GET | `/api/auth/me` | Current account |
 | POST | `/api/auth/logout` | Revoke session |
+| POST | `/api/groups` | Create a group and add its owner as the first member |
+| POST | `/api/groups/join` | Join a group using an invite code |
 | GET | `/api/habits` | List your habits |
 | POST | `/api/habits` | Create habit |
 | GET | `/api/habits/:id` | Habit details and check-in history |
@@ -47,6 +49,19 @@ scrypt and random salts; only token hashes are stored in SQLite.
 | DELETE | `/api/habits/:id` | Delete habit and its check-ins |
 | PUT | `/api/habits/:id/check-ins/:date` | Check in, safely repeatable |
 | DELETE | `/api/habits/:id/check-ins/:date` | Undo check-in, safely repeatable |
+
+Group input: `{ "name": "Study Buddies", "inviteCode": "STUDY42" }`.
+Name is required (1–60 characters). Invite code is optional; omit it or leave it
+blank to generate an 8-character code. Custom codes accept 6–15 ASCII letters
+or numbers and are stored uppercase. A taken code returns 409 with
+`Invite code already taken—choose another.` Creation requires login and returns
+201 with `{group: {id, name, ownerId, inviteCode, createdAt}}`. The signed-in user
+is the owner; the group and its first membership are saved together.
+
+Join input: `{ "inviteCode": "STUDY42" }`. Requires login; codes ignore capitalization.
+Returns 201 with `{group: {id, name, ownerId, createdAt}}`. Invalid code formats
+return 400, unknown codes return 404, and existing members (including the owner)
+receive 409 with `You’re already a member.` Joining does not share private habits.
 
 Habit input: `{ "name": "Read", "description": "One chapter", "schedule": "daily" }`.
 `schedule` is `daily` or `weekdays` (Monday–Friday). Description is optional.

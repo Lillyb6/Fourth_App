@@ -60,6 +60,20 @@ export function createApp({ databasePath = ':memory:', sessionSeconds = 604800 }
       habit_id TEXT NOT NULL REFERENCES habits(id) ON DELETE CASCADE,
       date TEXT NOT NULL, PRIMARY KEY (habit_id, date)
     );
+    CREATE TABLE IF NOT EXISTS groups (
+      id TEXT PRIMARY KEY,
+      name TEXT NOT NULL,
+      owner_id TEXT NOT NULL REFERENCES users(id) ON DELETE RESTRICT,
+      invite_code TEXT NOT NULL UNIQUE,
+      created_at TEXT NOT NULL
+    );
+    CREATE TABLE IF NOT EXISTS group_memberships (
+      group_id TEXT NOT NULL REFERENCES groups(id) ON DELETE CASCADE,
+      user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+      joined_at TEXT NOT NULL,
+      PRIMARY KEY (group_id, user_id)
+    );
+    CREATE INDEX IF NOT EXISTS group_memberships_user ON group_memberships(user_id);
   `);
   const app = express();
   app.disable('x-powered-by');
@@ -127,6 +141,52 @@ export function createApp({ databasePath = ':memory:', sessionSeconds = 604800 }
   app.post('/api/auth/logout', (req, res) => {
     db.prepare('DELETE FROM sessions WHERE token_hash = ?').run(req.tokenHash);
     res.sendStatus(204);
+  });
+
+  app.post('/api/groups', (req, res) => {
+    const name = string(req.body?.name, 'name', 60);
+    let inviteCode = string(req.body?.inviteCode, 'inviteCode', 15, true).toUpperCase();
+    if (inviteCode && !/^[A-Z0-9]{6,15}$/.test(inviteCode)) {
+      fail(400, 'Invite code must contain 6–15 letters or numbers.');
+    }
+    const codeExists = code => db.prepare('SELECT id FROM groups WHERE UPPER(invite_code) = ?').get(code);
+    if (inviteCode && codeExists(inviteCode)) {
+      fail(409, 'Invite code already taken—choose another.');
+    }
+    if (!inviteCode) {
+      do {
+        inviteCode = randomBytes(4).toString('hex').toUpperCase();
+      } while (codeExists(inviteCode));
+    }
+    const group = { id: randomUUID(), name, ownerId: req.user.id, inviteCode, createdAt: new Date().toISOString() };
+    // Save both records together so every new group has its creator as a member.
+    db.exec('BEGIN');
+    try {
+      db.prepare('INSERT INTO groups (id, name, owner_id, invite_code, created_at) VALUES (?, ?, ?, ?, ?)')
+        .run(group.id, group.name, group.ownerId, group.inviteCode, group.createdAt);
+      db.prepare('INSERT INTO group_memberships (group_id, user_id, joined_at) VALUES (?, ?, ?)')
+        .run(group.id, group.ownerId, group.createdAt);
+      db.exec('COMMIT');
+    } catch (error) {
+      db.exec('ROLLBACK');
+      throw error;
+    }
+    res.status(201).json({ group });
+  });
+
+  app.post('/api/groups/join', (req, res) => {
+    const inviteCode = string(req.body?.inviteCode, 'inviteCode', 15).toUpperCase();
+    if (!/^[A-Z0-9]{6,15}$/.test(inviteCode)) {
+      fail(400, 'Invite code must contain 6–15 letters or numbers.');
+    }
+    const group = db.prepare('SELECT * FROM groups WHERE UPPER(invite_code) = ?').get(inviteCode);
+    if (!group) fail(404, 'No group found with that invite code.');
+    const result = db.prepare('INSERT OR IGNORE INTO group_memberships (group_id, user_id, joined_at) VALUES (?, ?, ?)')
+      .run(group.id, req.user.id, new Date().toISOString());
+    if (!result.changes) fail(409, 'You’re already a member.');
+    res.status(201).json({ group: {
+      id: group.id, name: group.name, ownerId: group.owner_id, createdAt: group.created_at,
+    } });
   });
 
   function ownedHabit(req) {
