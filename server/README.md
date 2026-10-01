@@ -1,7 +1,7 @@
 # HabitApp REST API
 
-First backend milestone: accounts, private habits, and persistent daily check-ins.
-The Flutter screens are not connected yet. Sharing, streak calculations,
+The backend supports accounts, private habits, check-ins, groups, and optional habit sharing.
+The Flutter screens are not connected yet. Streak calculations,
 email verification, and password reset are future milestones.
 
 ## Run locally
@@ -42,6 +42,8 @@ scrypt and random salts; only token hashes are stored in SQLite.
 | POST | `/api/auth/logout` | Revoke session |
 | POST | `/api/groups` | Create a group and add its owner as the first member |
 | GET | `/api/groups` | List your approved groups with member counts and owner status |
+| GET | `/api/groups/:id/progress?date=YYYY-MM-DD` | Members only: daily completion percentages |
+| GET | `/api/groups/:id/shared-habits` | Members only: habits explicitly shared with this group |
 | POST | `/api/groups/join` | Request to join using an invite code |
 | GET | `/api/groups/:id/requests` | Owner only: list pending applicants |
 | POST | `/api/groups/:id/requests/:userId/approve` | Owner only: approve an applicant |
@@ -52,6 +54,9 @@ scrypt and random salts; only token hashes are stored in SQLite.
 | GET | `/api/habits/:id` | Habit details and check-in history |
 | PUT | `/api/habits/:id` | Replace editable habit fields |
 | DELETE | `/api/habits/:id` | Delete habit and its check-ins |
+| GET | `/api/habits/:id/shares` | Habit owner only: view sharing settings for each group |
+| PUT | `/api/habits/:id/shares/:groupId` | Habit owner only: share or replace this group's sharing settings |
+| DELETE | `/api/habits/:id/shares/:groupId` | Habit owner only: stop sharing with this group |
 | PUT | `/api/habits/:id/check-ins/:date` | Check in, safely repeatable |
 | DELETE | `/api/habits/:id/check-ins/:date` | Undo check-in, safely repeatable |
 
@@ -81,7 +86,49 @@ Existing memberships are preserved when this server version starts.
 Leaving returns 204. If the owner leaves, ownership transfers to the earliest
 remaining member by join date (membership insertion order breaks ties). If the
 owner is alone, the group is deleted. Nonmembers and unknown groups return 404.
-Leaving changes only the signed-in user's membership, not their habits or account.
+Leaving also removes that user's habit shares for the group, but keeps their habits
+and account. Rejoining does not restore old shares; sharing must be enabled again.
+
+Progress requires the app's local calendar date, using the same date convention
+as check-ins. All members are evaluated for that date. It returns
+`{date, members: [{userId, email, completionPercentage}]}` for approved members
+only. Percentages are rounded to whole numbers and count daily habits plus
+weekday habits on Monday–Friday. A member with no scheduled habits receives
+`completionPercentage: null` and `message: "No habits scheduled"`.
+Only current members can read progress; pending applicants, former members,
+and outsiders receive 404. Responses contain no habit names, descriptions,
+check-in history, or invite codes. Calculations use the current habit schedules;
+this is not a historical snapshot of past schedule changes.
+
+## Habit sharing
+
+Habits are not shared by default. The habit owner must be an approved member of
+each group they share with. Sharing with one group does not affect other groups.
+Only the habit owner can read or change sharing settings, even if someone else
+owns the group.
+
+Send `PUT /api/habits/:id/shares/:groupId` with:
+
+```json
+{"shareDescription": false, "shareSchedule": false, "shareCheckIns": false}
+```
+
+All three options accept only booleans and default to false when omitted. Each
+PUT replaces the options for that group, so send all current switch values when
+saving. An empty object shares only the name. Returns 200 with
+`{share: {groupId, shareDescription, shareSchedule, shareCheckIns}}`.
+`GET /api/habits/:id/shares` returns `{shares: [...]}` with those same settings.
+DELETE stops sharing with that group and returns 204, including repeated deletes.
+
+Group members read `{habits: [{id, userId, email, name}]}` from the shared-habits
+endpoint. Description, schedule, and checkIns are included only when their
+respective options are enabled; disabled fields are omitted entirely. Check-in
+sharing includes the full current history, newest first. Shared values reflect
+later habit edits and check-ins. The owner's existing private habit endpoint
+remains owner-only. Pending applicants, outsiders, and former members cannot
+read shared habits. Deleting a habit or group also removes its sharing records.
+
+## Habit requests
 
 Habit input: `{ "name": "Read", "description": "One chapter", "schedule": "daily" }`.
 `schedule` is `daily` or `weekdays` (Monday–Friday). Description is optional.

@@ -278,3 +278,180 @@ test('owners control requests and invite visibility, including after ownership t
   assert.equal((await list(third.token)).data.groups[0].memberCount, 2);
   assert.equal('inviteCode' in (await list(third.token)).data.groups[0], false);
 });
+
+test('group progress counts scheduled habits and protects details and member access', async t => {
+  const f = await fixture(); t.after(() => f.close());
+  const users = [];
+  for (const email of ['progress@example.com', 'weekdays@example.com', 'empty@example.com', 'pending@example.com', 'stranger@example.com']) {
+    users.push((await f.request('/api/auth/register', { method: 'POST', body: account(email) })).data);
+  }
+  const [owner, weekdayMember, emptyMember, pending, stranger] = users;
+  const group = (await f.request('/api/groups', { method: 'POST', token: owner.token, body: { name: 'Progress' } })).data.group;
+  for (const user of [weekdayMember, emptyMember, pending]) {
+    assert.equal((await f.request('/api/groups/join', { method: 'POST', token: user.token, body: { inviteCode: group.inviteCode } })).status, 202);
+    if (user !== pending) {
+      assert.equal((await f.request(`/api/groups/${group.id}/requests/${user.user.id}/approve`, { method: 'POST', token: owner.token })).status, 204);
+    }
+  }
+  const createHabit = async (user, schedule) => {
+    const result = await f.request('/api/habits', { method: 'POST', token: user.token, body: { name: 'Private name', description: 'Private details', schedule } });
+    assert.equal(result.status, 201);
+    return result.data.habit.id;
+  };
+  const first = await createHabit(owner, 'daily');
+  const second = await createHabit(owner, 'daily');
+  await createHabit(owner, 'weekdays');
+  await createHabit(weekdayMember, 'weekdays');
+  for (const date of ['2026-01-05', '2026-01-10']) {
+    for (const habitId of [first, second]) {
+      assert.equal((await f.request(`/api/habits/${habitId}/check-ins/${date}`, { method: 'PUT', token: owner.token })).status, 201);
+    }
+  }
+  const progress = (date, token = owner.token) => f.request(`/api/groups/${group.id}/progress?date=${date}`, { token });
+  const monday = await progress('2026-01-05');
+  assert.equal(monday.status, 200);
+  assert.equal(monday.data.date, '2026-01-05');
+  assert.equal(monday.data.members.length, 3);
+  assert.deepEqual(monday.data.members.find(m => m.userId === owner.user.id), {
+    userId: owner.user.id, email: owner.user.email, completionPercentage: 67,
+  });
+  assert.deepEqual(monday.data.members.find(m => m.userId === weekdayMember.user.id), {
+    userId: weekdayMember.user.id, email: weekdayMember.user.email, completionPercentage: 0,
+  });
+  assert.deepEqual(monday.data.members.find(m => m.userId === emptyMember.user.id), {
+    userId: emptyMember.user.id, email: emptyMember.user.email, completionPercentage: null, message: 'No habits scheduled',
+  });
+  const saturday = await progress('2026-01-10', weekdayMember.token);
+  assert.equal(saturday.status, 200);
+  assert.equal(saturday.data.members.find(m => m.userId === owner.user.id).completionPercentage, 100);
+  assert.equal(saturday.data.members.find(m => m.userId === weekdayMember.user.id).completionPercentage, null);
+  assert.equal(saturday.data.members.find(m => m.userId === weekdayMember.user.id).message, 'No habits scheduled');
+  assert.equal((await progress('2026-01-06')).data.members.find(m => m.userId === owner.user.id).completionPercentage, 0);
+  assert.equal((await f.request(`/api/groups/${group.id}/progress?date=2026-01-05`)).status, 401);
+  for (const user of [pending, stranger]) assert.equal((await progress('2026-01-05', user.token)).status, 404);
+  for (const date of ['bad', '2026-02-30', '2099-01-01', '2026-01-05&date=2026-01-06']) {
+    assert.equal((await progress(date)).status, 400);
+  }
+  assert.equal((await f.request(`/api/groups/${group.id}/progress`, { token: owner.token })).status, 400);
+  assert.equal((await f.request('/api/groups/missing/progress?date=2026-01-05', { token: owner.token })).status, 404);
+  assert.equal((await f.request(`/api/groups/${group.id}/membership`, { method: 'DELETE', token: weekdayMember.token })).status, 204);
+  assert.equal((await progress('2026-01-05', weekdayMember.token)).status, 404);
+  assert.equal((await progress('2026-01-05')).data.members.length, 2);
+});
+
+async function sharingSetup(f) {
+  const users = [];
+  for (const email of ['share-owner@example.com', 'sharer@example.com', 'viewer@example.com', 'waiting@example.com', 'outsider@example.com']) {
+    users.push((await f.request('/api/auth/register', { method: 'POST', body: account(email) })).data);
+  }
+  const [owner, sharer, viewer, pending, outsider] = users;
+  const groups = [];
+  for (const name of ['Study', 'Fitness']) {
+    groups.push((await f.request('/api/groups', { method: 'POST', token: owner.token, body: { name } })).data.group);
+  }
+  async function join(user, group, approve = true) {
+    assert.equal((await f.request('/api/groups/join', { method: 'POST', token: user.token, body: { inviteCode: group.inviteCode } })).status, 202);
+    if (approve) assert.equal((await f.request(`/api/groups/${group.id}/requests/${user.user.id}/approve`, { method: 'POST', token: owner.token })).status, 204);
+  }
+  await join(sharer, groups[0]);
+  await join(viewer, groups[0]);
+  await join(pending, groups[0], false);
+  await join(sharer, groups[1]);
+  const habit = (await f.request('/api/habits', { method: 'POST', token: sharer.token,
+    body: { name: 'Reading', description: 'One chapter', schedule: 'weekdays' } })).data.habit;
+  await f.request('/api/habits', { method: 'POST', token: sharer.token, body: { name: 'Never shared' } });
+  for (const date of ['2026-01-05', '2026-01-06']) {
+    assert.equal((await f.request(`/api/habits/${habit.id}/check-ins/${date}`, { method: 'PUT', token: sharer.token })).status, 201);
+  }
+  return { owner, sharer, viewer, pending, outsider, groups, habit, join };
+}
+
+test('habit sharing is per group, each optional field is independent, and only the habit owner controls it', async t => {
+  const f = await fixture(); t.after(() => f.close());
+  const { owner, sharer, viewer, pending, outsider, groups, habit } = await sharingSetup(f);
+  const settingsPath = `/api/habits/${habit.id}/shares`;
+  const sharePath = `${settingsPath}/${groups[0].id}`;
+  const readPath = `/api/groups/${groups[0].id}/shared-habits`;
+  const read = () => f.request(readPath, { token: viewer.token });
+  const save = body => f.request(sharePath, { method: 'PUT', token: sharer.token, body });
+  const base = { id: habit.id, userId: sharer.user.id, email: sharer.user.email, name: 'Reading' };
+  assert.deepEqual((await read()).data.habits, []);
+  assert.deepEqual((await f.request(settingsPath, { token: sharer.token })).data.shares, []);
+  assert.equal((await save({})).status, 200);
+  assert.deepEqual((await read()).data.habits, [base]);
+  assert.deepEqual((await f.request(`/api/groups/${groups[1].id}/shared-habits`, { token: owner.token })).data.habits, []);
+  for (const user of [owner, viewer, pending, outsider]) {
+    assert.equal((await f.request(settingsPath, { token: user.token })).status, 404);
+    assert.equal((await f.request(sharePath, { method: 'PUT', token: user.token, body: { shareCheckIns: true } })).status, 404);
+    assert.equal((await f.request(sharePath, { method: 'DELETE', token: user.token })).status, 404);
+  }
+  for (const user of [pending, outsider]) assert.equal((await f.request(readPath, { token: user.token })).status, 404);
+  for (const [path, method] of [[readPath, 'GET'], [settingsPath, 'GET'], [sharePath, 'PUT'], [sharePath, 'DELETE']]) {
+    assert.equal((await f.request(path, { method })).status, 401);
+  }
+  assert.equal((await f.request(`/api/groups/${groups[1].id}/shared-habits`, { token: viewer.token })).status, 404);
+  assert.equal((await f.request(`${settingsPath}/missing`, { method: 'PUT', token: sharer.token, body: {} })).status, 404);
+  for (const field of ['shareDescription', 'shareSchedule', 'shareCheckIns']) {
+    for (const value of ['false', 1, null]) assert.equal((await save({ [field]: value })).status, 400);
+  }
+  assert.deepEqual((await read()).data.habits, [base]);
+  // Exercise every switch combination, including switching previously visible details off.
+  for (let bits = 7; bits >= 0; bits--) {
+    const options = { shareDescription: Boolean(bits & 1), shareSchedule: Boolean(bits & 2), shareCheckIns: Boolean(bits & 4) };
+    assert.equal((await save(options)).status, 200);
+    assert.deepEqual((await f.request(settingsPath, { token: sharer.token })).data.shares, [{ groupId: groups[0].id, ...options }]);
+    assert.deepEqual((await read()).data.habits, [{ ...base,
+      ...(options.shareDescription ? { description: 'One chapter' } : {}),
+      ...(options.shareSchedule ? { schedule: 'weekdays' } : {}),
+      ...(options.shareCheckIns ? { checkIns: ['2026-01-06', '2026-01-05'] } : {}),
+    }]);
+  }
+  assert.equal((await f.request(`${settingsPath}/${groups[1].id}`, { method: 'PUT', token: sharer.token, body: { shareSchedule: true } })).status, 200);
+  assert.deepEqual((await read()).data.habits, [base]);
+  assert.deepEqual((await f.request(`/api/groups/${groups[1].id}/shared-habits`, { token: owner.token })).data.habits, [{ ...base, schedule: 'weekdays' }]);
+  assert.equal((await f.request(`/api/habits/${habit.id}`, { token: viewer.token })).status, 404);
+  assert.equal((await f.request(sharePath, { method: 'DELETE', token: sharer.token })).status, 204);
+  assert.equal((await f.request(sharePath, { method: 'DELETE', token: sharer.token })).status, 204);
+  assert.deepEqual((await read()).data.habits, []);
+  assert.equal((await f.request(`/api/groups/${groups[1].id}/shared-habits`, { token: owner.token })).data.habits.length, 1);
+});
+
+test('shares persist, leaving revokes them, rejoining does not restore them, and deletions clean up', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'habitapp-sharing-'));
+  const databasePath = join(dir, 'test.sqlite');
+  let f;
+  let db;
+  try {
+    f = await fixture({ databasePath });
+    const { owner, sharer, viewer, groups, habit } = await sharingSetup(f);
+    const sharePath = `/api/habits/${habit.id}/shares/${groups[0].id}`;
+    const readPath = `/api/groups/${groups[0].id}/shared-habits`;
+    const save = () => f.request(sharePath, { method: 'PUT', token: sharer.token, body: { shareDescription: true } });
+    assert.equal((await save()).status, 200);
+    await f.close(); f = null;
+    f = await fixture({ databasePath });
+    assert.equal((await f.request(readPath, { token: viewer.token })).data.habits[0].description, 'One chapter');
+    assert.equal((await f.request(`/api/groups/${groups[0].id}/membership`, { method: 'DELETE', token: sharer.token })).status, 204);
+    assert.deepEqual((await f.request(readPath, { token: viewer.token })).data.habits, []);
+    assert.equal((await save()).status, 404);
+    assert.equal((await f.request(readPath, { token: sharer.token })).status, 404);
+    assert.equal((await f.request('/api/groups/join', { method: 'POST', token: sharer.token, body: { inviteCode: groups[0].inviteCode } })).status, 202);
+    assert.equal((await f.request(`/api/groups/${groups[0].id}/requests/${sharer.user.id}/approve`, { method: 'POST', token: owner.token })).status, 204);
+    assert.deepEqual((await f.request(readPath, { token: viewer.token })).data.habits, []);
+    assert.equal((await save()).status, 200);
+    assert.equal((await f.request(`/api/habits/${habit.id}`, { method: 'DELETE', token: sharer.token })).status, 204);
+    assert.deepEqual((await f.request(readPath, { token: viewer.token })).data.habits, []);
+    db = new DatabaseSync(databasePath);
+    assert.equal(db.prepare('SELECT COUNT(*) AS count FROM habit_shares').get().count, 0);
+    const solo = (await f.request('/api/groups', { method: 'POST', token: owner.token, body: { name: 'Solo' } })).data.group;
+    const ownHabit = (await f.request('/api/habits', { method: 'POST', token: owner.token, body: { name: 'Solo routine' } })).data.habit;
+    assert.equal((await f.request(`/api/habits/${ownHabit.id}/shares/${solo.id}`, { method: 'PUT', token: owner.token, body: {} })).status, 200);
+    assert.equal((await f.request(`/api/groups/${solo.id}/membership`, { method: 'DELETE', token: owner.token })).status, 204);
+    assert.equal(db.prepare('SELECT COUNT(*) AS count FROM habit_shares').get().count, 0);
+    assert.equal((await f.request(`/api/habits/${ownHabit.id}`, { token: owner.token })).status, 200);
+  } finally {
+    if (f) await f.close();
+    if (db) db.close();
+    rmSync(dir, { recursive: true, force: true });
+  }
+});

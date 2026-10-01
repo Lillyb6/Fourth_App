@@ -80,6 +80,17 @@ export function createApp({ databasePath = ':memory:', sessionSeconds = 604800 }
       requested_at TEXT NOT NULL,
       PRIMARY KEY (group_id, user_id)
     );
+    CREATE TABLE IF NOT EXISTS habit_shares (
+      habit_id TEXT NOT NULL REFERENCES habits(id) ON DELETE CASCADE,
+      group_id TEXT NOT NULL,
+      user_id TEXT NOT NULL,
+      share_description INTEGER NOT NULL DEFAULT 0 CHECK (share_description IN (0, 1)),
+      share_schedule INTEGER NOT NULL DEFAULT 0 CHECK (share_schedule IN (0, 1)),
+      share_check_ins INTEGER NOT NULL DEFAULT 0 CHECK (share_check_ins IN (0, 1)),
+      PRIMARY KEY (habit_id, group_id),
+      FOREIGN KEY (group_id, user_id) REFERENCES group_memberships(group_id, user_id) ON DELETE CASCADE
+    );
+    CREATE INDEX IF NOT EXISTS habit_shares_group ON habit_shares(group_id, user_id);
   `);
   const app = express();
   app.disable('x-powered-by');
@@ -207,11 +218,50 @@ export function createApp({ databasePath = ':memory:', sessionSeconds = 604800 }
     })) });
   });
 
+  app.get('/api/groups/:id/progress', (req, res) => {
+    const membership = db.prepare('SELECT 1 FROM group_memberships WHERE group_id = ? AND user_id = ?')
+      .get(req.params.id, req.user.id);
+    if (!membership) fail(404, 'Group not found.');
+    const date = string(req.query.date, 'date', 10);
+    const isWeekday = ![0, 6].includes(checkDate(date).getUTCDay());
+    const members = db.prepare(`SELECT users.id, users.email,
+      COUNT(habits.id) AS scheduled, COUNT(check_ins.habit_id) AS completed
+      FROM group_memberships JOIN users ON users.id = group_memberships.user_id
+      LEFT JOIN habits ON habits.user_id = users.id AND (habits.schedule = 'daily' OR ?)
+      LEFT JOIN check_ins ON check_ins.habit_id = habits.id AND check_ins.date = ?
+      WHERE group_memberships.group_id = ?
+      GROUP BY users.id, users.email ORDER BY users.email, users.id`)
+      .all(isWeekday ? 1 : 0, date, req.params.id);
+    res.json({ date, members: members.map(member => ({
+      userId: member.id,
+      email: member.email,
+      completionPercentage: member.scheduled ? Math.round(member.completed / member.scheduled * 100) : null,
+      ...(member.scheduled ? {} : { message: 'No habits scheduled' }),
+    })) });
+  });
+
   function ownedGroup(req) {
     const group = db.prepare('SELECT * FROM groups WHERE id = ? AND owner_id = ?').get(req.params.id, req.user.id);
     if (!group) fail(404, 'Group not found.');
     return group;
   }
+  app.get('/api/groups/:id/shared-habits', (req, res) => {
+    if (!db.prepare('SELECT 1 FROM group_memberships WHERE group_id = ? AND user_id = ?').get(req.params.id, req.user.id)) {
+      fail(404, 'Group not found.');
+    }
+    const shares = db.prepare(`SELECT habits.id, habits.name, habits.description, habits.schedule,
+      users.id AS user_id, users.email, share_description, share_schedule, share_check_ins
+      FROM habit_shares JOIN habits ON habits.id = habit_shares.habit_id AND habits.user_id = habit_shares.user_id
+      JOIN users ON users.id = habit_shares.user_id
+      WHERE habit_shares.group_id = ? ORDER BY users.email, habits.name, habits.id`).all(req.params.id);
+    res.json({ habits: shares.map(share => ({
+      id: share.id, userId: share.user_id, email: share.email, name: share.name,
+      ...(share.share_description ? { description: share.description } : {}),
+      ...(share.share_schedule ? { schedule: share.schedule } : {}),
+      ...(share.share_check_ins ? { checkIns: db.prepare('SELECT date FROM check_ins WHERE habit_id = ? ORDER BY date DESC')
+        .all(share.id).map(row => row.date) } : {}),
+    })) });
+  });
   app.get('/api/groups/:id/requests', (req, res) => {
     const group = ownedGroup(req);
     const requests = db.prepare(`SELECT users.id AS userId, users.email, requested_at AS requestedAt
@@ -283,6 +333,39 @@ export function createApp({ databasePath = ':memory:', sessionSeconds = 604800 }
       checkIns: db.prepare('SELECT date FROM check_ins WHERE habit_id = ? ORDER BY date DESC').all(habit.id).map(row => row.date),
     };
   }
+  app.get('/api/habits/:id/shares', (req, res) => {
+    const habit = ownedHabit(req);
+    const shares = db.prepare('SELECT * FROM habit_shares WHERE habit_id = ? ORDER BY group_id').all(habit.id);
+    res.json({ shares: shares.map(share => ({
+      groupId: share.group_id,
+      shareDescription: Boolean(share.share_description),
+      shareSchedule: Boolean(share.share_schedule),
+      shareCheckIns: Boolean(share.share_check_ins),
+    })) });
+  });
+  app.put('/api/habits/:id/shares/:groupId', (req, res) => {
+    const habit = ownedHabit(req);
+    if (!db.prepare('SELECT 1 FROM group_memberships WHERE group_id = ? AND user_id = ?').get(req.params.groupId, req.user.id)) {
+      fail(404, 'Group not found.');
+    }
+    const options = {};
+    for (const field of ['shareDescription', 'shareSchedule', 'shareCheckIns']) {
+      const value = req.body?.[field];
+      if (value !== undefined && typeof value !== 'boolean') fail(400, `${field} must be true or false.`);
+      options[field] = value === true;
+    }
+    db.prepare(`INSERT INTO habit_shares (habit_id, group_id, user_id, share_description, share_schedule, share_check_ins)
+      VALUES (?, ?, ?, ?, ?, ?) ON CONFLICT (habit_id, group_id) DO UPDATE SET
+      share_description = excluded.share_description, share_schedule = excluded.share_schedule,
+      share_check_ins = excluded.share_check_ins`)
+      .run(habit.id, req.params.groupId, req.user.id, Number(options.shareDescription), Number(options.shareSchedule), Number(options.shareCheckIns));
+    res.json({ share: { groupId: req.params.groupId, ...options } });
+  });
+  app.delete('/api/habits/:id/shares/:groupId', (req, res) => {
+    const habit = ownedHabit(req);
+    db.prepare('DELETE FROM habit_shares WHERE habit_id = ? AND group_id = ?').run(habit.id, req.params.groupId);
+    res.sendStatus(204);
+  });
   app.get('/api/habits', (req, res) => {
     const habits = db.prepare('SELECT * FROM habits WHERE user_id = ? ORDER BY created_at, id').all(req.user.id);
     res.json({ habits: habits.map(serialize) });
