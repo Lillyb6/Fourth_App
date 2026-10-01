@@ -1,24 +1,39 @@
 import 'package:flutter/material.dart';
 
+import 'api.dart';
+import 'auth_screen.dart';
+
 void main() => runApp(const MyApp());
 
-class Habit {
-  Habit(this.name, this.description, this.weekdaysOnly);
-  final String name;
-  final String description;
-  final bool weekdaysOnly;
-  final Set<DateTime> checkIns = {};
-  String get schedule => weekdaysOnly ? 'Weekdays' : 'Every day';
-  bool due(DateTime date) => !weekdaysOnly || date.weekday <= 5;
+class MyApp extends StatefulWidget {
+  const MyApp({super.key, this.api});
+  final HabitApi? api;
+  @override
+  State<MyApp> createState() => _MyAppState();
 }
 
-DateTime day(DateTime date) => DateTime(date.year, date.month, date.day);
-String dateLabel(DateTime date) => '${date.month}/${date.day}/${date.year}';
+class _MyAppState extends State<MyApp> {
+  late final HabitApi api = widget.api ?? HabitApi();
+  @override
+  void initState() {
+    super.initState();
+    api.addListener(sessionChanged);
+  }
 
-class MyApp extends StatelessWidget {
-  const MyApp({super.key});
+  void sessionChanged() {
+    if (mounted) setState(() {});
+  }
+
+  @override
+  void dispose() {
+    api.removeListener(sessionChanged);
+    if (widget.api == null) api.dispose();
+    super.dispose();
+  }
+
   @override
   Widget build(BuildContext context) => MaterialApp(
+    key: ValueKey(api.authenticated),
     title: 'HabitApp',
     debugShowCheckedModeBanner: false,
     theme: ThemeData(
@@ -33,32 +48,85 @@ class MyApp extends StatelessWidget {
         margin: EdgeInsets.only(bottom: 12),
       ),
     ),
-    home: const HabitHome(),
+    home: api.authenticated ? HabitHome(api: api) : AuthScreen(api: api),
   );
 }
 
 class HabitHome extends StatefulWidget {
-  const HabitHome({super.key});
+  const HabitHome({super.key, required this.api});
+  final HabitApi api;
   @override
   State<HabitHome> createState() => _HabitHomeState();
 }
 
 class _HabitHomeState extends State<HabitHome> {
-  final List<Habit> habits = [];
+  List<Habit> habits = [];
+  bool loading = true;
+  bool signingOut = false;
+  String? loadError;
+  final Set<String> pending = {};
+  @override
+  void initState() {
+    super.initState();
+    load();
+  }
+
+  Future<void> load() async {
+    setState(() {
+      loading = true;
+      loadError = null;
+    });
+    try {
+      final saved = await widget.api.habits();
+      if (mounted) setState(() => habits = saved);
+    } on ApiException catch (e) {
+      if (mounted) setState(() => loadError = e.message);
+    } finally {
+      if (mounted) setState(() => loading = false);
+    }
+  }
+
+  Future<void> logout() async {
+    setState(() => signingOut = true);
+    try {
+      await widget.api.logout();
+    } on ApiException catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context)
+            .showSnackBar(SnackBar(content: Text(e.message)));
+      }
+    } finally {
+      if (mounted) setState(() => signingOut = false);
+    }
+  }
+
   int selectedPage = 0;
 
   Future<void> createHabit() async {
-    final habit = await Navigator.of(
-      context,
-    ).push<Habit>(MaterialPageRoute(builder: (_) => const CreateHabitScreen()));
+    final habit = await Navigator.of(context).push<Habit>(
+      MaterialPageRoute(builder: (_) => CreateHabitScreen(api: widget.api)),
+    );
     if (habit != null && mounted) setState(() => habits.add(habit));
   }
 
-  void toggle(Habit habit) {
+  Future<void> toggle(Habit habit) async {
+    if (pending.contains(habit.id)) return;
     final today = day(DateTime.now());
-    setState(() {
-      if (!habit.checkIns.remove(today)) habit.checkIns.add(today);
-    });
+    setState(() => pending.add(habit.id));
+    try {
+      await widget.api.checkIn(
+        habit,
+        today,
+        completed: !habit.checkIns.contains(today),
+      );
+    } on ApiException catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context)
+            .showSnackBar(SnackBar(content: Text(e.message)));
+      }
+    } finally {
+      if (mounted) setState(() => pending.remove(habit.id));
+    }
   }
 
   @override
@@ -71,8 +139,17 @@ class _HabitHomeState extends State<HabitHome> {
     return Scaffold(
       appBar: AppBar(
         title: const Text('HabitApp'),
-        actions: const [
-          Padding(padding: EdgeInsets.all(16), child: Icon(Icons.spa_outlined)),
+        actions: [
+          IconButton(
+            tooltip: 'Refresh habits',
+            onPressed: loading || pending.isNotEmpty ? null : load,
+            icon: const Icon(Icons.refresh),
+          ),
+          IconButton(
+            tooltip: 'Sign out',
+            onPressed: signingOut ? null : logout,
+            icon: const Icon(Icons.logout),
+          ),
         ],
       ),
       body: Center(
@@ -80,6 +157,25 @@ class _HabitHomeState extends State<HabitHome> {
           constraints: const BoxConstraints(maxWidth: 760),
           child: selectedPage == 1
               ? const AccountabilityScreen()
+              : loading
+              ? const Center(child: CircularProgressIndicator())
+              : loadError != null
+              ? Center(
+                  child: Padding(
+                    padding: const EdgeInsets.all(24),
+                    child: Column(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        Text(loadError!, textAlign: TextAlign.center),
+                        const SizedBox(height: 16),
+                        FilledButton(
+                          onPressed: load,
+                          child: const Text('Retry'),
+                        ),
+                      ],
+                    ),
+                  ),
+                )
               : ListView(
                   padding: const EdgeInsets.all(24),
                   children: [
@@ -167,7 +263,8 @@ class _HabitHomeState extends State<HabitHome> {
                             tooltip: habit.checkIns.contains(today)
                                 ? 'Undo check-in'
                                 : 'Check in',
-                            onPressed: habit.due(today)
+                            onPressed:
+                                habit.due(today) && !pending.contains(habit.id)
                                 ? () => toggle(habit)
                                 : null,
                             icon: Icon(
@@ -176,22 +273,24 @@ class _HabitHomeState extends State<HabitHome> {
                                   : Icons.add_task,
                             ),
                           ),
-                          onTap: () async {
-                            await Navigator.of(context).push(
-                              MaterialPageRoute<void>(
-                                builder: (_) => HabitDetailsScreen(
-                                  habit: habit,
-                                  onToggle: () => toggle(habit),
-                                ),
-                              ),
-                            );
-                            if (mounted) setState(() {});
-                          },
+                          onTap: pending.contains(habit.id)
+                              ? null
+                              : () async {
+                                  await Navigator.of(context).push(
+                                    MaterialPageRoute<void>(
+                                      builder: (_) => HabitDetailsScreen(
+                                        habit: habit,
+                                        onToggle: () => toggle(habit),
+                                      ),
+                                    ),
+                                  );
+                                  if (mounted) setState(() {});
+                                },
                         ),
                       ),
                     const SizedBox(height: 12),
                     const Text(
-                      'Preview: habits and check-ins stay in memory for this session.',
+                      'Your habits and check-ins are saved to your account.',
                       style: TextStyle(color: Colors.black54),
                     ),
                     const SizedBox(height: 90),
@@ -201,7 +300,7 @@ class _HabitHomeState extends State<HabitHome> {
       ),
       floatingActionButton: selectedPage == 0
           ? FloatingActionButton.extended(
-              onPressed: createHabit,
+              onPressed: loading || loadError != null ? null : createHabit,
               icon: const Icon(Icons.add),
               label: const Text('New habit'),
             )
@@ -225,7 +324,8 @@ class _HabitHomeState extends State<HabitHome> {
 }
 
 class CreateHabitScreen extends StatefulWidget {
-  const CreateHabitScreen({super.key});
+  const CreateHabitScreen({super.key, required this.api});
+  final HabitApi api;
   @override
   State<CreateHabitScreen> createState() => _CreateHabitScreenState();
 }
@@ -235,6 +335,28 @@ class _CreateHabitScreenState extends State<CreateHabitScreen> {
   final name = TextEditingController();
   final description = TextEditingController();
   bool weekdaysOnly = false;
+  bool saving = false;
+  String? error;
+  Future<void> save() async {
+    if (!formKey.currentState!.validate() || saving) return;
+    setState(() {
+      saving = true;
+      error = null;
+    });
+    try {
+      final saved = await widget.api.create(
+        name.text.trim(),
+        description.text.trim(),
+        weekdaysOnly,
+      );
+      if (mounted) Navigator.pop(context, saved);
+    } on ApiException catch (e) {
+      if (mounted) setState(() => error = e.message);
+    } finally {
+      if (mounted) setState(() => saving = false);
+    }
+  }
+
   @override
   void dispose() {
     name.dispose();
@@ -309,20 +431,14 @@ class _CreateHabitScreenState extends State<CreateHabitScreen> {
                 ),
               ),
               const SizedBox(height: 24),
+              if (error != null)
+                Padding(
+                  padding: const EdgeInsets.only(bottom: 12),
+                  child: Text(error!),
+                ),
               FilledButton(
-                onPressed: () {
-                  if (formKey.currentState!.validate()) {
-                    Navigator.pop(
-                      context,
-                      Habit(
-                        name.text.trim(),
-                        description.text.trim(),
-                        weekdaysOnly,
-                      ),
-                    );
-                  }
-                },
-                child: const Text('Create habit'),
+                onPressed: saving ? null : save,
+                child: Text(saving ? 'Saving…' : 'Create habit'),
               ),
             ],
           ),
@@ -339,12 +455,13 @@ class HabitDetailsScreen extends StatefulWidget {
     required this.onToggle,
   });
   final Habit habit;
-  final VoidCallback onToggle;
+  final Future<void> Function() onToggle;
   @override
   State<HabitDetailsScreen> createState() => _HabitDetailsScreenState();
 }
 
 class _HabitDetailsScreenState extends State<HabitDetailsScreen> {
+  bool saving = false;
   @override
   Widget build(BuildContext context) {
     final habit = widget.habit;
@@ -387,10 +504,11 @@ class _HabitDetailsScreenState extends State<HabitDetailsScreen> {
               ),
               const SizedBox(height: 24),
               FilledButton.icon(
-                onPressed: habit.due(today)
-                    ? () {
-                        widget.onToggle();
-                        setState(() {});
+                onPressed: habit.due(today) && !saving
+                    ? () async {
+                        setState(() => saving = true);
+                        await widget.onToggle();
+                        if (mounted) setState(() => saving = false);
                       }
                     : null,
                 icon: Icon(done ? Icons.undo : Icons.check),
@@ -459,7 +577,7 @@ class AccountabilityScreen extends StatelessWidget {
               OutlinedButton(onPressed: null, child: Text('Join with a code')),
               SizedBox(height: 12),
               Text(
-                'Groups will be available after accounts and the backend are connected.',
+                'Accountability groups are coming next. Your habits are private.',
                 textAlign: TextAlign.center,
               ),
             ],

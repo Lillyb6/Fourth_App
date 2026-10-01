@@ -1,7 +1,7 @@
 # HabitApp REST API
 
 First backend milestone: accounts, private habits, and persistent daily check-ins.
-The Flutter screens are not connected yet. Groups, sharing, streak calculations,
+The Flutter Android screens now connect to this API; see the root README. Groups, sharing, streak calculations,
 email verification, and password reset are future milestones.
 
 ## Run locally
@@ -21,7 +21,7 @@ retain accounts and habits. The data folder is excluded from Git.
 The built-in Node SQLite API may print an experimental warning on Node 24.11.
 
 For the Android emulator, the host computer is `http://10.0.2.2:3000`.
-Flutter integration will need a development-only HTTP network policy and a
+Android debug builds include a local-only HTTP network policy and a
 configurable base URL. Flutter web will also need an explicit CORS allowlist.
 This is a local development server; use HTTPS and a reviewed deployment setup
 before exposing accounts over the internet.
