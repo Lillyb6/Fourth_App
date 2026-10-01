@@ -1,7 +1,7 @@
 # HabitApp REST API
 
 First backend milestone: accounts, private habits, and persistent daily check-ins.
-The Flutter screens are not connected yet. Group leaving, sharing, streak calculations,
+The Flutter screens are not connected yet. Sharing, streak calculations,
 email verification, and password reset are future milestones.
 
 ## Run locally
@@ -41,7 +41,12 @@ scrypt and random salts; only token hashes are stored in SQLite.
 | GET | `/api/auth/me` | Current account |
 | POST | `/api/auth/logout` | Revoke session |
 | POST | `/api/groups` | Create a group and add its owner as the first member |
-| POST | `/api/groups/join` | Join a group using an invite code |
+| GET | `/api/groups` | List your approved groups with member counts and owner status |
+| POST | `/api/groups/join` | Request to join using an invite code |
+| GET | `/api/groups/:id/requests` | Owner only: list pending applicants |
+| POST | `/api/groups/:id/requests/:userId/approve` | Owner only: approve an applicant |
+| DELETE | `/api/groups/:id/requests/:userId` | Owner only: reject an applicant |
+| DELETE | `/api/groups/:id/membership` | Leave a group as the signed-in user |
 | GET | `/api/habits` | List your habits |
 | POST | `/api/habits` | Create habit |
 | GET | `/api/habits/:id` | Habit details and check-in history |
@@ -59,9 +64,24 @@ or numbers and are stored uppercase. A taken code returns 409 with
 is the owner; the group and its first membership are saved together.
 
 Join input: `{ "inviteCode": "STUDY42" }`. Requires login; codes ignore capitalization.
-Returns 201 with `{group: {id, name, ownerId, createdAt}}`. Invalid code formats
+Returns 202 with `{status: "pending", message: "Your request is pending approval."}`.
+Repeating a pending request returns 200 with the same response. Invalid code formats
 return 400, unknown codes return 404, and existing members (including the owner)
 receive 409 with `You’re already a member.` Joining does not share private habits.
+
+Group lists return `{groups: [{id, name, memberCount, isOwner}]}`. Only the owner
+also receives `inviteCode`. Pending requests do not count as memberships or
+appear in the applicant's group list. The frontend can use `isOwner` for a crown.
+Owners can list `{requests: [{userId, email, requestedAt}]}` and approve or reject
+each request. Both actions return 204; missing requests return 404. Nonowners
+cannot read requests or make decisions (404). Rejected applicants can request again.
+Approval creates the membership; join order for ownership succession starts then.
+Existing memberships are preserved when this server version starts.
+
+Leaving returns 204. If the owner leaves, ownership transfers to the earliest
+remaining member by join date (membership insertion order breaks ties). If the
+owner is alone, the group is deleted. Nonmembers and unknown groups return 404.
+Leaving changes only the signed-in user's membership, not their habits or account.
 
 Habit input: `{ "name": "Read", "description": "One chapter", "schedule": "daily" }`.
 `schedule` is `daily` or `weekdays` (Monday–Friday). Description is optional.

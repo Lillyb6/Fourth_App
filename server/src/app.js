@@ -74,6 +74,12 @@ export function createApp({ databasePath = ':memory:', sessionSeconds = 604800 }
       PRIMARY KEY (group_id, user_id)
     );
     CREATE INDEX IF NOT EXISTS group_memberships_user ON group_memberships(user_id);
+    CREATE TABLE IF NOT EXISTS group_join_requests (
+      group_id TEXT NOT NULL REFERENCES groups(id) ON DELETE CASCADE,
+      user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+      requested_at TEXT NOT NULL,
+      PRIMARY KEY (group_id, user_id)
+    );
   `);
   const app = express();
   app.disable('x-powered-by');
@@ -181,12 +187,88 @@ export function createApp({ databasePath = ':memory:', sessionSeconds = 604800 }
     }
     const group = db.prepare('SELECT * FROM groups WHERE UPPER(invite_code) = ?').get(inviteCode);
     if (!group) fail(404, 'No group found with that invite code.');
-    const result = db.prepare('INSERT OR IGNORE INTO group_memberships (group_id, user_id, joined_at) VALUES (?, ?, ?)')
+    if (db.prepare('SELECT 1 FROM group_memberships WHERE group_id = ? AND user_id = ?').get(group.id, req.user.id)) {
+      fail(409, 'You’re already a member.');
+    }
+    const result = db.prepare('INSERT OR IGNORE INTO group_join_requests (group_id, user_id, requested_at) VALUES (?, ?, ?)')
       .run(group.id, req.user.id, new Date().toISOString());
-    if (!result.changes) fail(409, 'You’re already a member.');
-    res.status(201).json({ group: {
-      id: group.id, name: group.name, ownerId: group.owner_id, createdAt: group.created_at,
-    } });
+    res.status(result.changes ? 202 : 200).json({ status: 'pending', message: 'Your request is pending approval.' });
+  });
+
+  app.get('/api/groups', (req, res) => {
+    const groups = db.prepare(`SELECT groups.*,
+      (SELECT COUNT(*) FROM group_memberships WHERE group_id = groups.id) AS member_count
+      FROM groups JOIN group_memberships ON group_memberships.group_id = groups.id
+      WHERE group_memberships.user_id = ? ORDER BY groups.created_at, groups.id`).all(req.user.id);
+    res.json({ groups: groups.map(group => ({
+      id: group.id, name: group.name, memberCount: group.member_count,
+      isOwner: group.owner_id === req.user.id,
+      ...(group.owner_id === req.user.id ? { inviteCode: group.invite_code } : {}),
+    })) });
+  });
+
+  function ownedGroup(req) {
+    const group = db.prepare('SELECT * FROM groups WHERE id = ? AND owner_id = ?').get(req.params.id, req.user.id);
+    if (!group) fail(404, 'Group not found.');
+    return group;
+  }
+  app.get('/api/groups/:id/requests', (req, res) => {
+    const group = ownedGroup(req);
+    const requests = db.prepare(`SELECT users.id AS userId, users.email, requested_at AS requestedAt
+      FROM group_join_requests JOIN users ON users.id = group_join_requests.user_id
+      WHERE group_id = ? ORDER BY requested_at, users.id`).all(group.id);
+    res.json({ requests });
+  });
+  app.post('/api/groups/:id/requests/:userId/approve', (req, res) => {
+    db.exec('BEGIN');
+    try {
+      const group = ownedGroup(req);
+      const request = db.prepare('SELECT 1 FROM group_join_requests WHERE group_id = ? AND user_id = ?')
+        .get(group.id, req.params.userId);
+      if (!request) fail(404, 'Join request not found.');
+      db.prepare('INSERT INTO group_memberships (group_id, user_id, joined_at) VALUES (?, ?, ?)')
+        .run(group.id, req.params.userId, new Date().toISOString());
+      db.prepare('DELETE FROM group_join_requests WHERE group_id = ? AND user_id = ?').run(group.id, req.params.userId);
+      db.exec('COMMIT');
+    } catch (error) {
+      db.exec('ROLLBACK');
+      throw error;
+    }
+    res.sendStatus(204);
+  });
+  app.delete('/api/groups/:id/requests/:userId', (req, res) => {
+    const group = ownedGroup(req);
+    const result = db.prepare('DELETE FROM group_join_requests WHERE group_id = ? AND user_id = ?')
+      .run(group.id, req.params.userId);
+    if (!result.changes) fail(404, 'Join request not found.');
+    res.sendStatus(204);
+  });
+
+  app.delete('/api/groups/:id/membership', (req, res) => {
+    db.exec('BEGIN');
+    try {
+      const group = db.prepare(`SELECT groups.* FROM groups
+        JOIN group_memberships ON group_memberships.group_id = groups.id
+        WHERE groups.id = ? AND group_memberships.user_id = ?`).get(req.params.id, req.user.id);
+      if (!group) fail(404, 'Group not found.');
+      if (group.owner_id === req.user.id) {
+        const nextOwner = db.prepare(`SELECT user_id FROM group_memberships
+          WHERE group_id = ? AND user_id != ? ORDER BY joined_at, rowid LIMIT 1`)
+          .get(group.id, req.user.id);
+        if (nextOwner) {
+          db.prepare('UPDATE groups SET owner_id = ? WHERE id = ?').run(nextOwner.user_id, group.id);
+        } else {
+          db.prepare('DELETE FROM groups WHERE id = ?').run(group.id);
+        }
+      }
+      db.prepare('DELETE FROM group_memberships WHERE group_id = ? AND user_id = ?')
+        .run(group.id, req.user.id);
+      db.exec('COMMIT');
+    } catch (error) {
+      db.exec('ROLLBACK');
+      throw error;
+    }
+    res.sendStatus(204);
   });
 
   function ownedHabit(req) {

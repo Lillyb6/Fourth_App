@@ -82,8 +82,14 @@ test('join groups by code without duplicate memberships or sharing private habit
     }
     assert.equal((await joinGroup({ inviteCode: 'MISSING' }, member.token)).status, 404);
     const joined = await joinGroup({ inviteCode: 'study42', userId: owner.user.id }, member.token);
-    assert.equal(joined.status, 201);
-    assert.deepEqual(joined.data.group, { id: group.id, name: group.name, ownerId: group.ownerId, createdAt: group.createdAt });
+    assert.equal(joined.status, 202);
+    assert.equal(joined.data.message, 'Your request is pending approval.');
+    const pending = await joinGroup({ inviteCode: 'STUDY42' }, member.token);
+    assert.equal(pending.status, 200);
+    assert.equal(pending.data.status, 'pending');
+    assert.deepEqual((await f.request('/api/groups', { token: member.token })).data.groups, []);
+    const approved = await f.request(`/api/groups/${group.id}/requests/${member.user.id}/approve`, { method: 'POST', token: owner.token });
+    assert.equal(approved.status, 204);
     for (const token of [member.token, owner.token]) {
       const duplicate = await joinGroup({ inviteCode: 'StUdY42' }, token);
       assert.equal(duplicate.status, 409);
@@ -160,4 +166,115 @@ test('expired sessions cannot read habits', async t => {
   const f = await fixture({ sessionSeconds: -1 }); t.after(() => f.close());
   const user = await f.request('/api/auth/register', { method: 'POST', body: account('expired@example.com') });
   assert.equal((await f.request('/api/habits', { token: user.data.token })).status, 401);
+});
+
+test('leaving transfers ownership in join order and deletes the last member’s group', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'habitapp-leave-'));
+  const databasePath = join(dir, 'test.sqlite');
+  let f;
+  let db;
+  try {
+    f = await fixture({ databasePath });
+    db = new DatabaseSync(databasePath);
+    const users = [];
+    for (const email of ['p1@example.com', 'p2@example.com', 'p3@example.com', 'outsider@example.com']) {
+      users.push((await f.request('/api/auth/register', { method: 'POST', body: account(email) })).data);
+    }
+    const [p1, p2, p3, outsider] = users;
+    const group = (await f.request('/api/groups', { method: 'POST', token: p1.token, body: { name: 'Study' } })).data.group;
+    const joinGroup = user => f.request('/api/groups/join', { method: 'POST', token: user.token, body: { inviteCode: group.inviteCode } });
+    const leave = token => f.request(`/api/groups/${group.id}/membership`, { method: 'DELETE', token });
+    const ownerId = () => db.prepare('SELECT owner_id FROM groups WHERE id = ?').get(group.id)?.owner_id;
+    const memberCount = () => db.prepare('SELECT COUNT(*) AS count FROM group_memberships WHERE group_id = ?').get(group.id).count;
+    assert.equal((await joinGroup(p2)).status, 202);
+    assert.equal((await f.request(`/api/groups/${group.id}/requests/${p2.user.id}/approve`, { method: 'POST', token: p1.token })).status, 204);
+    assert.equal((await joinGroup(p3)).status, 202);
+    assert.equal((await f.request(`/api/groups/${group.id}/requests/${p3.user.id}/approve`, { method: 'POST', token: p1.token })).status, 204);
+    assert.equal((await leave()).status, 401);
+    assert.equal((await leave(outsider.token)).status, 404);
+    assert.equal((await f.request('/api/groups/missing/membership', { method: 'DELETE', token: p1.token })).status, 404);
+    assert.equal(memberCount(), 3);
+    assert.equal(ownerId(), p1.user.id);
+    // A regular member can leave and rejoin without changing the owner.
+    assert.equal((await leave(p3.token)).status, 204);
+    assert.equal(ownerId(), p1.user.id);
+    assert.equal(memberCount(), 2);
+    assert.equal((await leave(p3.token)).status, 404);
+    assert.equal((await joinGroup(p3)).status, 202);
+    assert.equal((await f.request(`/api/groups/${group.id}/requests/${p3.user.id}/approve`, { method: 'POST', token: p1.token })).status, 204);
+    // Even if two joins have the same timestamp, insertion order favors p2.
+    db.prepare('UPDATE group_memberships SET joined_at = ? WHERE group_id = ?')
+      .run('2026-01-01T00:00:00.000Z', group.id);
+    assert.equal((await leave(p1.token)).status, 204);
+    assert.equal(ownerId(), p2.user.id);
+    assert.equal(memberCount(), 2);
+    assert.equal((await leave(p2.token)).status, 204);
+    assert.equal(ownerId(), p3.user.id);
+    assert.equal(memberCount(), 1);
+    assert.equal((await leave(p3.token)).status, 204);
+    assert.equal(ownerId(), undefined);
+    assert.equal(memberCount(), 0);
+    assert.equal((await joinGroup(outsider)).status, 404);
+    assert.equal((await f.request('/api/auth/me', { token: p1.token })).status, 200);
+    await f.close(); f = null;
+    db.close();
+    db = new DatabaseSync(databasePath);
+    assert.equal(memberCount(), 0);
+    assert.equal(ownerId(), undefined);
+  } finally {
+    if (f) await f.close();
+    if (db) db.close();
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('owners control requests and invite visibility, including after ownership transfers', async t => {
+  const f = await fixture(); t.after(() => f.close());
+  const users = [];
+  for (const email of ['leader@example.com', 'second@example.com', 'third@example.com', 'outside@example.com']) {
+    users.push((await f.request('/api/auth/register', { method: 'POST', body: account(email) })).data);
+  }
+  const [owner, second, third, outsider] = users;
+  const group = (await f.request('/api/groups', { method: 'POST', token: owner.token, body: { name: 'Circle' } })).data.group;
+  const requestsPath = `/api/groups/${group.id}/requests`;
+  const list = token => f.request('/api/groups', { token });
+  const requestJoin = user => f.request('/api/groups/join', { method: 'POST', token: user.token, body: { inviteCode: group.inviteCode } });
+  const approve = (user, token) => f.request(`${requestsPath}/${user.user.id}/approve`, { method: 'POST', token });
+  const reject = (user, token) => f.request(`${requestsPath}/${user.user.id}`, { method: 'DELETE', token });
+  assert.equal((await list()).status, 401);
+  assert.equal((await requestJoin(second)).status, 202);
+  assert.equal((await requestJoin(third)).status, 202);
+  const owned = (await list(owner.token)).data.groups[0];
+  assert.deepEqual(owned, { id: group.id, name: 'Circle', memberCount: 1, isOwner: true, inviteCode: group.inviteCode });
+  assert.deepEqual((await list(outsider.token)).data.groups, []);
+  assert.deepEqual((await list(second.token)).data.groups, []);
+  assert.equal((await f.request(requestsPath)).status, 401);
+  assert.equal((await approve(second)).status, 401);
+  assert.equal((await reject(second)).status, 401);
+  for (const user of [second, outsider]) {
+    assert.equal((await f.request(requestsPath, { token: user.token })).status, 404);
+    assert.equal((await approve(second, user.token)).status, 404);
+    assert.equal((await reject(third, user.token)).status, 404);
+  }
+  const requests = (await f.request(requestsPath, { token: owner.token })).data.requests;
+  assert.deepEqual(requests.map(r => r.email).sort(), ['second@example.com', 'third@example.com']);
+  assert.ok(requests.every(r => r.userId && r.requestedAt && Object.keys(r).length === 3));
+  assert.equal((await reject(third, owner.token)).status, 204);
+  assert.equal((await approve(third, owner.token)).status, 404);
+  assert.equal((await requestJoin(third)).status, 202);
+  assert.equal((await approve(second, owner.token)).status, 204);
+  assert.equal((await approve(second, owner.token)).status, 404);
+  assert.deepEqual((await list(second.token)).data.groups[0], { id: group.id, name: 'Circle', memberCount: 2, isOwner: false });
+  assert.equal((await f.request(requestsPath, { token: second.token })).status, 404);
+  assert.equal((await approve(third, second.token)).status, 404);
+  assert.equal((await reject(third, second.token)).status, 404);
+  assert.equal((await f.request(`/api/groups/${group.id}/membership`, { method: 'DELETE', token: owner.token })).status, 204);
+  assert.deepEqual((await list(owner.token)).data.groups, []);
+  assert.equal((await approve(third, owner.token)).status, 404);
+  assert.equal((await f.request(requestsPath, { token: owner.token })).status, 404);
+  assert.equal((await list(second.token)).data.groups[0].inviteCode, group.inviteCode);
+  assert.equal((await list(second.token)).data.groups[0].isOwner, true);
+  assert.equal((await approve(third, second.token)).status, 204);
+  assert.equal((await list(third.token)).data.groups[0].memberCount, 2);
+  assert.equal('inviteCode' in (await list(third.token)).data.groups[0], false);
 });
