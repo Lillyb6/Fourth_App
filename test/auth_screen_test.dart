@@ -51,7 +51,7 @@ void main() {
     expect(tester.takeException(), isNull);
   });
 
-  testWidgets('Invalid email and empty password block sign-in requests', (
+  testWidgets('Sign-in validation clears each error as input is corrected', (
     tester,
   ) async {
     final requests = <http.Request>[];
@@ -68,6 +68,25 @@ void main() {
 
     expect(find.text('Enter a valid email address.'), findsOneWidget);
     expect(find.text('Enter your password.'), findsOneWidget);
+
+    await tester.enterText(
+      find.widgetWithText(TextFormField, 'Email'),
+      'reader@example.com',
+    );
+    await tester.tap(find.widgetWithText(FilledButton, 'Sign in'));
+    await tester.pumpAndSettle();
+    expect(find.text('Enter a valid email address.'), findsNothing);
+    expect(find.text('Enter your password.'), findsOneWidget);
+
+    await enterCredentials(
+      tester,
+      email: 'reader@',
+      password: 'valid-password',
+    );
+    await tester.tap(find.widgetWithText(FilledButton, 'Sign in'));
+    await tester.pumpAndSettle();
+    expect(find.text('Enter a valid email address.'), findsOneWidget);
+    expect(find.text('Enter your password.'), findsNothing);
     expect(requests, isEmpty);
     expect(api.authenticated, isFalse);
   });
@@ -124,7 +143,7 @@ void main() {
     },
   );
 
-  testWidgets('Failed login displays error and allows successful retry', (
+  testWidgets('Wrong password displays error and corrected password signs in', (
     tester,
   ) async {
     var attempts = 0;
@@ -132,7 +151,13 @@ void main() {
       client: MockClient((request) async {
         if (request.url.path == '/api/auth/login') {
           attempts++;
-          return attempts == 1
+          final credentials = jsonDecode(request.body) as Map<String, dynamic>;
+          expect(credentials['email'], 'reader@example.com');
+          expect(
+            credentials['password'],
+            attempts == 1 ? 'wrong-password' : 'correct-password',
+          );
+          return credentials['password'] == 'wrong-password'
               ? http.Response('{"error":"Invalid email or password"}', 401)
               : http.Response('{"token":"retry-token"}', 200);
         }
@@ -141,7 +166,11 @@ void main() {
       }),
     );
     await launch(tester, api);
-    await enterCredentials(tester);
+    await enterCredentials(
+      tester,
+      email: 'reader@example.com',
+      password: 'wrong-password',
+    );
     await tester.tap(find.widgetWithText(FilledButton, 'Sign in'));
     await tester.pumpAndSettle();
 
@@ -154,6 +183,10 @@ void main() {
       isNotNull,
     );
 
+    await tester.enterText(
+      find.widgetWithText(TextFormField, 'Password'),
+      'correct-password',
+    );
     await tester.tap(find.widgetWithText(FilledButton, 'Sign in'));
     await tester.pumpAndSettle();
     expect(attempts, 2);

@@ -143,7 +143,7 @@ void main() {
     expect(tester.takeException(), isNull);
   });
 
-  testWidgets('Late journal response cannot replace the newly selected day', (
+  testWidgets('Late journal error cannot hide the newly selected day', (
     tester,
   ) async {
     final oldResponse = Completer<http.Response>();
@@ -173,10 +173,14 @@ void main() {
     newResponse.complete(entry('Latest day note', dates[2]));
     await tester.pumpAndSettle();
     expect(find.text('Latest day note'), findsOneWidget);
-    oldResponse.complete(entry('Stale day note', dates[1]));
+    oldResponse.complete(
+      http.Response('{"error":"Earlier day failed to load"}', 503),
+    );
     await tester.pumpAndSettle();
     expect(find.text('Latest day note'), findsOneWidget);
-    expect(find.text('Stale day note'), findsNothing);
+    expect(find.text('Earlier day failed to load'), findsNothing);
+    expect(find.text('Retry'), findsNothing);
+    expect(find.byType(CircularProgressIndicator), findsNothing);
     expect(tester.takeException(), isNull);
   });
 
