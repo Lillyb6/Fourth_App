@@ -57,7 +57,7 @@ class _JournalScreenState extends State<JournalScreen> {
     padding: const EdgeInsets.all(24),
     children: [
       Text(
-        'Your daily journal',
+        'Your Daily Journal',
         style: Theme.of(context).textTheme.headlineMedium,
       ),
       const SizedBox(height: 8),
