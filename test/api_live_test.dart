@@ -4,6 +4,7 @@ import 'dart:io';
 
 import 'package:flutter_test/flutter_test.dart';
 import 'package:fourthapp/api.dart';
+import 'package:fourthapp/habit_share.dart';
 
 void main() {
   test(
@@ -56,6 +57,86 @@ void main() {
           completed: false,
         );
         expect((await second.habits()).single.checkIns, isEmpty);
+        final inviteCode = await second.createGroup(
+          'Reading circle',
+          'read1234',
+        );
+        expect(inviteCode, 'READ1234');
+        await first.authenticate(
+          'group-member@example.com',
+          'local-test-password',
+          register: true,
+        );
+        await first.requestToJoinGroup(inviteCode.toLowerCase());
+        // Repeating a pending request is also a successful response.
+        await first.requestToJoinGroup(inviteCode);
+        expect(await first.groups(), isEmpty);
+        final ownedGroup = (await second.groups()).single;
+        expect(ownedGroup.isOwner, isTrue);
+        expect(ownedGroup.inviteCode, inviteCode);
+        final request = (await second.groupRequests(ownedGroup.id)).single;
+        expect(request.email, 'group-member@example.com');
+        await second.decideGroupRequest(
+          ownedGroup.id,
+          request.userId,
+          approve: true,
+        );
+        expect(await second.groupRequests(ownedGroup.id), isEmpty);
+        final joinedGroup = (await first.groups()).single;
+        expect(joinedGroup.memberCount, 2);
+        expect(joinedGroup.isOwner, isFalse);
+        expect(joinedGroup.inviteCode, isNull);
+        await second.saveHabitShare(
+          habit.id,
+          ownedGroup.id,
+          const HabitShare(description: true),
+        );
+        expect(
+          (await second.habitShares(habit.id))[ownedGroup.id]!.description,
+          isTrue,
+        );
+        final visibleHabit = (await first.sharedHabits(ownedGroup.id)).single;
+        expect(visibleHabit.name, 'Read a chapter');
+        expect(visibleHabit.description, 'Before bed');
+        expect(visibleHabit.schedule, isNull);
+        expect(visibleHabit.checkIns, isNull);
+        final progress = await first.groupProgress(
+          ownedGroup.id,
+          DateTime.now(),
+        );
+        expect(progress.length, 2);
+        expect(
+          progress
+              .singleWhere((member) => member.email == 'flutter@example.com')
+              .percentage,
+          0,
+        );
+        expect(
+          progress
+              .singleWhere(
+                (member) => member.email == 'group-member@example.com',
+              )
+              .percentage,
+          isNull,
+        );
+        await second.saveHabitShare(habit.id, ownedGroup.id, null);
+        expect(await second.habitShares(habit.id), isEmpty);
+        expect(await first.sharedHabits(ownedGroup.id), isEmpty);
+        await second.saveHabitShare(
+          habit.id,
+          ownedGroup.id,
+          const HabitShare(),
+        );
+        await second.makeHabitPrivate(habit.id);
+        expect(await second.habitShares(habit.id), isEmpty);
+        await first.leaveGroup(ownedGroup.id);
+        expect(await first.groups(), isEmpty);
+        await expectLater(
+          first.sharedHabits(ownedGroup.id),
+          throwsA(isA<ApiException>()),
+        );
+        expect((await second.groups()).single.memberCount, 1);
+        await first.logout();
         await second.logout();
       } finally {
         first?.dispose();
