@@ -62,6 +62,14 @@ signup password limits and successful registration, retry after failed login,
 and duplicate submission prevention while login is pending. They use a mocked
 API, so no running backend is required.
 
+Six additional core-flow tests cover failed check-in and undo retries, failed
+logout recovery, out-of-order journal responses, independent sharing options,
+and making a habit private after a failed update. Run them without a backend:
+
+```powershell
+flutter test test/core_flows_test.dart
+```
+
 Run the full checks:
 
 ```powershell
