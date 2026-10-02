@@ -1,4 +1,4 @@
-# HabitApp
+# Berry Daily
 
 Flutter habit tracker with an Express REST API and SQLite storage.
 
@@ -46,8 +46,7 @@ adb reverse tcp:3000 tcp:3000
 flutter run --dart-define=API_BASE_URL=http://127.0.0.1:3000
 ```
 
-Release builds require an explicit HTTPS API URL. Flutter web is not configured
-yet: the backend needs an explicit CORS allowlist for the web app's origin.
+Release builds require an explicit HTTPS API URL. Local Flutter web is supported on port 8080; see below.
 iOS/macOS local networking has not been configured or verified in this milestone.
 
 ## Verification
@@ -71,3 +70,23 @@ Accounts and habit data are removed from the navigation stack on logout or
 expired sessions. Group features are still a placeholder.
 
 See [server/README.md](server/README.md) for endpoint details.
+
+## Run in Chrome
+
+Keep the backend running, then from the repository root run:
+
+```powershell
+flutter run -d chrome --web-hostname=127.0.0.1 --web-port=8080 --dart-define=API_BASE_URL=http://127.0.0.1:3000
+```
+
+The backend permits browser requests from `http://127.0.0.1:8080` and
+`http://localhost:8080`. Restart the backend after changing its code.
+
+## Berry Daily tabs
+
+- Dashboard: create habits and check them off for today.
+- Progress: browse months and select a day to see saved habit completions.
+- Journal: choose a date and add, edit, or delete private notes, reminders, and journal entries. Reminders are written entries, without scheduled notifications.
+- Accountability: the existing group placeholder remains available for future group work.
+
+Journal entries persist in the same SQLite database as habits and accounts.

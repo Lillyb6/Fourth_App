@@ -22,7 +22,7 @@ The built-in Node SQLite API may print an experimental warning on Node 24.11.
 
 For the Android emulator, the host computer is `http://10.0.2.2:3000`.
 Android debug builds include a local-only HTTP network policy and a
-configurable base URL. Flutter web will also need an explicit CORS allowlist.
+configurable base URL. Local Flutter web is allowed on port 8080 at http://127.0.0.1:8080 and http://localhost:8080.
 This is a local development server; use HTTPS and a reviewed deployment setup
 before exposing accounts over the internet.
 

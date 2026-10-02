@@ -35,6 +35,25 @@ class Habit {
   );
 }
 
+class JournalEntry {
+  const JournalEntry({
+    required this.id,
+    required this.date,
+    required this.kind,
+    required this.body,
+  });
+  final String id;
+  final DateTime date;
+  final String kind;
+  final String body;
+  factory JournalEntry.fromJson(Map<String, dynamic> data) => JournalEntry(
+    id: data['id'] as String,
+    date: DateTime.parse(data['date'] as String),
+    kind: data['kind'] as String,
+    body: data['body'] as String,
+  );
+}
+
 class ApiException implements Exception {
   const ApiException(this.message);
   final String message;
@@ -176,6 +195,29 @@ class HabitApi extends ChangeNotifier {
     } else {
       habit.checkIns.remove(day(date));
     }
+  }
+
+  Future<List<JournalEntry>> journal(DateTime date) async =>
+      ((await _request('GET', '/api/journal?date=${apiDate(date)}'))['entries']
+              as List)
+          .map((value) => JournalEntry.fromJson(value as Map<String, dynamic>))
+          .toList();
+
+  Future<void> saveEntry(
+    DateTime date,
+    String kind,
+    String text, {
+    String? id,
+  }) async {
+    await _request(
+      id == null ? 'POST' : 'PUT',
+      id == null ? '/api/journal' : '/api/journal/${Uri.encodeComponent(id)}',
+      body: {'date': apiDate(date), 'kind': kind, 'body': text},
+    );
+  }
+
+  Future<void> deleteEntry(String id) async {
+    await _request('DELETE', '/api/journal/${Uri.encodeComponent(id)}');
   }
 
   @override

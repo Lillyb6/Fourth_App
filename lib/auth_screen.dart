@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 
 import 'api.dart';
+import 'branding.dart';
 
 class AuthScreen extends StatefulWidget {
   const AuthScreen({super.key, required this.api});
@@ -45,7 +46,7 @@ class _AuthScreenState extends State<AuthScreen> {
 
   @override
   Widget build(BuildContext context) => Scaffold(
-    appBar: AppBar(title: const Text('HabitApp')),
+    appBar: AppBar(toolbarHeight: 90, title: const BerryWordmark()),
     body: Center(
       child: ConstrainedBox(
         constraints: const BoxConstraints(maxWidth: 480),
@@ -54,7 +55,7 @@ class _AuthScreenState extends State<AuthScreen> {
           child: ListView(
             padding: const EdgeInsets.all(24),
             children: [
-              const Icon(Icons.spa_outlined, size: 60),
+              const BerryLogo(size: 112),
               const SizedBox(height: 24),
               Text(
                 register ? 'Start your next chapter' : 'Welcome back',

@@ -56,6 +56,12 @@ export function createApp({ databasePath = ':memory:', sessionSeconds = 604800 }
       created_at TEXT NOT NULL
     );
     CREATE INDEX IF NOT EXISTS habits_user ON habits(user_id);
+    CREATE TABLE IF NOT EXISTS journal_entries (
+      id TEXT PRIMARY KEY, user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+      date TEXT NOT NULL, kind TEXT NOT NULL CHECK (kind IN ('Note', 'Reminder', 'Journal')),
+      body TEXT NOT NULL, created_at TEXT NOT NULL
+    );
+    CREATE INDEX IF NOT EXISTS journal_user_date ON journal_entries(user_id, date);
     CREATE TABLE IF NOT EXISTS check_ins (
       habit_id TEXT NOT NULL REFERENCES habits(id) ON DELETE CASCADE,
       date TEXT NOT NULL, PRIMARY KEY (habit_id, date)
@@ -64,6 +70,18 @@ export function createApp({ databasePath = ':memory:', sessionSeconds = 604800 }
   const app = express();
   app.disable('x-powered-by');
   app.use(helmet());
+  // Allow only the fixed local Flutter web development origins.
+  app.use((req, res, next) => {
+    const origin = req.get('Origin');
+    res.vary('Origin');
+    if (['http://localhost:8080', 'http://127.0.0.1:8080'].includes(origin)) {
+      res.set('Access-Control-Allow-Origin', origin);
+      res.set('Access-Control-Allow-Methods', 'GET, POST, PUT, DELETE, OPTIONS');
+      res.set('Access-Control-Allow-Headers', 'Content-Type, Authorization');
+      if (req.method === 'OPTIONS') return res.sendStatus(204);
+    }
+    next();
+  });
   app.use(express.json({ limit: '16kb' }));
   app.use((req, res, next) => { res.set('Cache-Control', 'no-store'); next(); });
   app.get('/health', (req, res) => res.json({ status: 'ok' }));
@@ -126,6 +144,44 @@ export function createApp({ databasePath = ':memory:', sessionSeconds = 604800 }
   app.get('/api/auth/me', (req, res) => res.json({ user: req.user }));
   app.post('/api/auth/logout', (req, res) => {
     db.prepare('DELETE FROM sessions WHERE token_hash = ?').run(req.tokenHash);
+    res.sendStatus(204);
+  });
+
+  function journalDate(value) {
+    if (typeof value !== 'string' || !/^\d{4}-\d{2}-\d{2}$/.test(value)) fail(400, 'Choose a valid date.');
+    const date = new Date(`${value}T00:00:00Z`);
+    if (!Number.isFinite(date.getTime()) || date.toISOString().slice(0, 10) !== value) fail(400, 'Choose a valid date.');
+    return value;
+  }
+  function journalInput(body) {
+    const date = journalDate(body.date);
+    if (!['Note', 'Reminder', 'Journal'].includes(body.kind)) fail(400, 'Choose Note, Reminder, or Journal.');
+    return { date, kind: body.kind, body: string(body.body, 'Entry', 4000) };
+  }
+  function ownedEntry(req) {
+    const entry = db.prepare('SELECT id, date, kind, body FROM journal_entries WHERE id = ? AND user_id = ?').get(req.params.id, req.user.id);
+    if (!entry) fail(404, 'Entry not found.');
+    return entry;
+  }
+  app.get('/api/journal', (req, res) => {
+    const date = journalDate(req.query.date);
+    res.json({ entries: db.prepare('SELECT id, date, kind, body FROM journal_entries WHERE user_id = ? AND date = ? ORDER BY created_at, id').all(req.user.id, date) });
+  });
+  app.post('/api/journal', (req, res) => {
+    const input = journalInput(req.body ?? {});
+    const id = randomUUID();
+    db.prepare('INSERT INTO journal_entries VALUES (?, ?, ?, ?, ?, ?)').run(id, req.user.id, input.date, input.kind, input.body, new Date().toISOString());
+    res.status(201).json({ entry: { id, ...input } });
+  });
+  app.put('/api/journal/:id', (req, res) => {
+    const entry = ownedEntry(req);
+    const input = journalInput(req.body ?? {});
+    db.prepare('UPDATE journal_entries SET date = ?, kind = ?, body = ? WHERE id = ? AND user_id = ?').run(input.date, input.kind, input.body, entry.id, req.user.id);
+    res.json({ entry: { id: entry.id, ...input } });
+  });
+  app.delete('/api/journal/:id', (req, res) => {
+    const entry = ownedEntry(req);
+    db.prepare('DELETE FROM journal_entries WHERE id = ? AND user_id = ?').run(entry.id, req.user.id);
     res.sendStatus(204);
   });
 
