@@ -198,7 +198,7 @@ void main() {
         'Check-in history',
         'Description',
       ]) {
-        await tester.tap(find.widgetWithText(CheckboxListTile, label));
+        await tester.tap(find.widgetWithText(SwitchListTile, label));
         await tester.pumpAndSettle();
       }
       expect(writes, [
@@ -225,24 +225,24 @@ void main() {
       ]);
       expect(
         tester
-            .widget<CheckboxListTile>(
-              find.widgetWithText(CheckboxListTile, 'Description'),
+            .widget<SwitchListTile>(
+              find.widgetWithText(SwitchListTile, 'Description'),
             )
             .value,
         isFalse,
       );
       expect(
         tester
-            .widget<CheckboxListTile>(
-              find.widgetWithText(CheckboxListTile, 'Schedule'),
+            .widget<SwitchListTile>(
+              find.widgetWithText(SwitchListTile, 'Schedule'),
             )
             .value,
         isTrue,
       );
       expect(
         tester
-            .widget<CheckboxListTile>(
-              find.widgetWithText(CheckboxListTile, 'Check-in history'),
+            .widget<SwitchListTile>(
+              find.widgetWithText(SwitchListTile, 'Check-in history'),
             )
             .value,
         isTrue,
@@ -269,18 +269,26 @@ void main() {
     await tester.pumpAndSettle();
     expect(find.text('Privacy update failed'), findsOneWidget);
     expect(
-      tester.widget<SwitchListTile>(find.byType(SwitchListTile)).value,
+      tester
+          .widget<SwitchListTile>(
+            find.widgetWithText(SwitchListTile, 'Readers'),
+          )
+          .value,
       isTrue,
     );
-    expect(find.byType(CheckboxListTile), findsNWidgets(3));
+    expect(find.byType(SwitchListTile), findsNWidgets(4));
     await tester.tap(find.text('Make private in all groups'));
     await tester.pumpAndSettle();
     expect(attempts, 2);
     expect(
-      tester.widget<SwitchListTile>(find.byType(SwitchListTile)).value,
+      tester
+          .widget<SwitchListTile>(
+            find.widgetWithText(SwitchListTile, 'Readers'),
+          )
+          .value,
       isFalse,
     );
-    expect(find.byType(CheckboxListTile), findsNothing);
+    expect(find.byType(SwitchListTile), findsOneWidget);
     expect(find.text('Make private in all groups'), findsNothing);
     expect(tester.takeException(), isNull);
   });
