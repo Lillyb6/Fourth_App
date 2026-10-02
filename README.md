@@ -51,6 +51,19 @@ iOS/macOS local networking has not been configured or verified in this milestone
 
 ## Verification
 
+Run the five startup and authentication tests independently:
+
+```powershell
+flutter test test/auth_screen_test.dart
+```
+
+These cover startup without private API requests, invalid sign-in input,
+signup password limits and successful registration, retry after failed login,
+and duplicate submission prevention while login is pending. They use a mocked
+API, so no running backend is required.
+
+Run the full checks:
+
 ```powershell
 flutter analyze
 flutter test
