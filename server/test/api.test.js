@@ -510,3 +510,51 @@ test('make private removes all shares only for the habit owner and keeps the hab
   assert.equal((await f.request(path, { method: 'DELETE', token: sharer.token })).status, 204);
   assert.equal((await f.request(`/api/habits/${habit.id}`, { token: sharer.token })).data.habit.checkIns.length, 2);
 });
+
+ test('local browser preflight permits configured origins only', async t => {
+  const { app, close } = createApp();
+  const server = app.listen(0, '127.0.0.1');
+  await new Promise(resolve => server.once('listening', resolve));
+  t.after(async () => { await new Promise(resolve => server.close(resolve)); close(); });
+  const url = `http://127.0.0.1:${server.address().port}/api/auth/login`;
+  for (const origin of ['http://127.0.0.1:8080', 'http://localhost:8080']) {
+    const response = await fetch(url, { method: 'OPTIONS', headers: {
+      Origin: origin, 'Access-Control-Request-Method': 'POST',
+      'Access-Control-Request-Headers': 'content-type,authorization',
+    } });
+    assert.equal(response.status, 204);
+    assert.equal(response.headers.get('access-control-allow-origin'), origin);
+    assert.match(response.headers.get('access-control-allow-headers'), /Authorization/);
+  }
+  const denied = await fetch(url, { method: 'OPTIONS', headers: { Origin: 'https://untrusted.example' } });
+  assert.equal(denied.headers.get('access-control-allow-origin'), null);
+ });
+
+test('journal is private, validates dates, supports editing and persists', async t => {
+  const dir = mkdtempSync(join(tmpdir(), 'berry-journal-'));
+  let f = await fixture({ databasePath: join(dir, 'test.sqlite') });
+  t.after(async () => { await f.close(); rmSync(dir, { recursive: true, force: true }); });
+  assert.equal((await f.request('/api/journal?date=2026-10-01')).status, 401);
+  const a = await f.request('/api/auth/register', { method: 'POST', body: account('journal@example.com') });
+  const b = await f.request('/api/auth/register', { method: 'POST', body: account('other@example.com') });
+  const token = a.data.token;
+  const input = { date: '2026-10-01', kind: 'Journal', body: 'A good day.' };
+  const created = await f.request('/api/journal', { method: 'POST', token, body: input });
+  assert.equal(created.status, 201);
+  const path = `/api/journal/${created.data.entry.id}`;
+  assert.deepEqual((await f.request('/api/journal?date=2026-10-01', { token: b.data.token })).data.entries, []);
+  for (const method of ['PUT', 'DELETE']) assert.equal((await f.request(path, { method, token: b.data.token, body: input })).status, 404);
+  for (const body of [{ ...input, date: '2026-02-30' }, { ...input, kind: 'invalid' }, { ...input, body: ' ' }, { ...input, body: 'x'.repeat(4001) }]) {
+    assert.equal((await f.request('/api/journal', { method: 'POST', token, body })).status, 400);
+  }
+  assert.equal((await f.request(path, { method: 'PUT', token, body: { ...input, kind: 'Reminder', body: 'Bring a book.' } })).status, 200);
+  assert.deepEqual((await f.request('/api/journal?date=2026-10-02', { token })).data.entries, []);
+  await f.close();
+  f = await fixture({ databasePath: join(dir, 'test.sqlite') });
+  const entries = (await f.request('/api/journal?date=2026-10-01', { token })).data.entries;
+  assert.equal(entries.length, 1);
+  assert.equal(entries[0].body, 'Bring a book.');
+  assert.equal(entries[0].kind, 'Reminder');
+  assert.equal((await f.request(path, { method: 'DELETE', token })).status, 204);
+  assert.deepEqual((await f.request('/api/journal?date=2026-10-01', { token })).data.entries, []);
+});

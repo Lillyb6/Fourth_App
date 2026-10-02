@@ -21,6 +21,7 @@ void main() {
       client: MockClient((request) async {
         calls.add('${request.method} ${request.url.path}');
         final path = request.url.path;
+        if (path == '/api/groups') return http.Response('{"groups":[]}', 200);
         if (path == '/api/auth/login') {
           return http.Response('{"token":"test-token"}', 200);
         }
@@ -72,6 +73,21 @@ void main() {
     await tester.tap(find.byTooltip('Check in'));
     await tester.pumpAndSettle();
     expect(find.text('1 of 1 scheduled habits complete'), findsOneWidget);
+    await tester.tap(find.text('Progress'));
+    await tester.pumpAndSettle();
+    expect(find.text('Read a book'), findsOneWidget);
+    expect(find.text('1 habit completions this month'), findsOneWidget);
+    await tester.tap(find.byTooltip('Previous month'));
+    await tester.pumpAndSettle();
+    expect(find.text('Read a book'), findsNothing);
+    await tester.tap(find.text('Today'));
+    await tester.pumpAndSettle();
+    expect(find.text('Read a book'), findsOneWidget);
+    await tester.tap(find.text('Accountability'));
+    await tester.pumpAndSettle();
+    expect(find.text('Your accountability circle'), findsOneWidget);
+    await tester.tap(find.text('Dashboard'));
+    await tester.pumpAndSettle();
     await tester.tap(find.text('Read a book'));
     await tester.pumpAndSettle();
     expect(find.text('Completed'), findsOneWidget);

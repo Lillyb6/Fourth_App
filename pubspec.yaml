@@ -56,7 +56,17 @@ flutter:
   # The following line ensures that the Material Icons font is
   # included with your application, so that you can use the icons in
   # the material Icons class.
+  fonts:
+    - family: Lora
+      fonts:
+        - asset: assets/fonts/Lora.ttf
+    - family: Nunito
+      fonts:
+        - asset: assets/fonts/Nunito.ttf
   uses-material-design: true
+  assets:
+    - assets/Berry_logo.webp
+    - assets/Berry_Daily_logo.webp
 
   # To add assets to your application, add an assets section, like this:
   # assets:

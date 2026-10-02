@@ -2,6 +2,10 @@ import 'package:flutter/material.dart';
 
 import 'api.dart';
 import 'accountability_screen.dart';
+import 'branding.dart';
+import 'berry_theme.dart';
+import 'progress_screen.dart';
+import 'journal_screen.dart';
 import 'auth_screen.dart';
 import 'habit_sharing_screen.dart';
 
@@ -36,20 +40,9 @@ class _MyAppState extends State<MyApp> {
   @override
   Widget build(BuildContext context) => MaterialApp(
     key: ValueKey(api.authenticated),
-    title: 'HabitApp',
+    title: 'Berry Daily',
     debugShowCheckedModeBanner: false,
-    theme: ThemeData(
-      colorScheme: ColorScheme.fromSeed(seedColor: const Color(0xff3569b0)),
-      scaffoldBackgroundColor: const Color(0xfff3f6fc),
-      useMaterial3: true,
-      inputDecorationTheme: const InputDecorationTheme(
-        border: OutlineInputBorder(),
-      ),
-      cardTheme: const CardThemeData(
-        elevation: 0,
-        margin: EdgeInsets.only(bottom: 12),
-      ),
-    ),
+    theme: berryTheme(),
     home: api.authenticated ? HabitHome(api: api) : AuthScreen(api: api),
   );
 }
@@ -140,7 +133,8 @@ class _HabitHomeState extends State<HabitHome> {
         .length;
     return Scaffold(
       appBar: AppBar(
-        title: const Text('HabitApp'),
+        toolbarHeight: 90,
+        title: const BerryWordmark(),
         actions: [
           IconButton(
             tooltip: 'Refresh habits',
@@ -157,8 +151,10 @@ class _HabitHomeState extends State<HabitHome> {
       body: Center(
         child: ConstrainedBox(
           constraints: const BoxConstraints(maxWidth: 760),
-          child: selectedPage == 1
+          child: selectedPage == 3
               ? AccountabilityScreen(api: widget.api)
+              : selectedPage == 2
+              ? JournalScreen(api: widget.api)
               : loading
               ? const Center(child: CircularProgressIndicator())
               : loadError != null
@@ -178,6 +174,8 @@ class _HabitHomeState extends State<HabitHome> {
                     ),
                   ),
                 )
+              : selectedPage == 1
+              ? ProgressScreen(habits: habits)
               : ListView(
                   padding: const EdgeInsets.all(24),
                   children: [
@@ -232,7 +230,7 @@ class _HabitHomeState extends State<HabitHome> {
                           padding: EdgeInsets.all(28),
                           child: Column(
                             children: [
-                              Icon(Icons.eco_outlined, size: 48),
+                              BerryLogo(size: 72),
                               SizedBox(height: 12),
                               Text('Start with one small habit'),
                               SizedBox(height: 8),
@@ -315,6 +313,14 @@ class _HabitHomeState extends State<HabitHome> {
           NavigationDestination(
             icon: Icon(Icons.dashboard_outlined),
             label: 'Dashboard',
+          ),
+          NavigationDestination(
+            icon: Icon(Icons.calendar_month_outlined),
+            label: 'Progress',
+          ),
+          NavigationDestination(
+            icon: Icon(Icons.auto_stories_outlined),
+            label: 'Journal',
           ),
           NavigationDestination(
             icon: Icon(Icons.people_outline),
@@ -483,7 +489,7 @@ class _HabitDetailsScreenState extends State<HabitDetailsScreen> {
             children: [
               const Align(
                 alignment: Alignment.centerLeft,
-                child: Icon(Icons.spa_outlined, size: 48),
+                child: BerryLogo(size: 72),
               ),
               const SizedBox(height: 20),
               Text(
@@ -504,9 +510,12 @@ class _HabitDetailsScreenState extends State<HabitDetailsScreen> {
                   ActionChip(
                     avatar: const Icon(Icons.shield_outlined, size: 16),
                     label: const Text('Manage sharing'),
-                    onPressed: () => Navigator.of(context).push(MaterialPageRoute<void>(
-                      builder: (_) => HabitSharingScreen(api: widget.api, habit: habit),
-                    )),
+                    onPressed: () => Navigator.of(context).push(
+                      MaterialPageRoute<void>(
+                        builder: (_) =>
+                            HabitSharingScreen(api: widget.api, habit: habit),
+                      ),
+                    ),
                   ),
                 ],
               ),
