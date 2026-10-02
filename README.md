@@ -69,7 +69,21 @@ API and widget tests cover failed writes, session expiry, retry, and navigation.
 Errors remain visible for retry; failed check-ins do not change local completion.
 Accounts and habit data are removed from the navigation stack on logout or
 expired sessions. The Accountability tab can create groups with an editable
-generated invite code and submit join requests for owner approval. Group lists,
-approval controls, progress, and sharing controls still need frontend integration.
+generated invite code and submit join requests for owner approval. It lists groups
+with member counts and an owner crown. Tap a group to view its details; owners
+can view the invite code and approve or reject requests, with confirmation for
+both actions. The list and details refresh every 10 seconds while visible and
+the app is active. Owners see an action-needed badge for pending requests.
+After ownership transfers, a new-owner notice remains until the new owner opens
+the group; that acknowledgment is saved across sessions and devices.
+Group details also include a confirmed Leave group action. Habit details include
+Manage sharing: select groups, independently share description/schedule/history,
+or make the habit private in all groups. Changes save immediately.
+Group details show an expandable overall progress bar: the rounded average of
+member percentages, excluding members with no habits scheduled for the app's
+current local date. Expand it for member emails, percentages, and individual bars.
+Shared habits appear under the person sharing them, with only the enabled details.
+Check-in history is collapsed until tapped. These sections refresh automatically
+with the rest of group details.
 
 See [server/README.md](server/README.md) for endpoint details.

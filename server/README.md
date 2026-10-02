@@ -2,7 +2,10 @@
 
 The backend supports accounts, private habits, check-ins, groups, and optional habit sharing.
 The Flutter Android account and habit screens now connect to this API; see the root README.
-Group screens remain a placeholder. Streak calculations, email verification,
+Flutter also supports group lists, creation, join requests, and owner approval.
+Flutter also supports leaving groups, managing habit sharing, and displaying
+member progress and shared habits with only the permitted details.
+Streak calculations, email verification,
 and password reset are future milestones.
 
 ## Run locally
@@ -43,6 +46,7 @@ scrypt and random salts; only token hashes are stored in SQLite.
 | POST | `/api/auth/logout` | Revoke session |
 | POST | `/api/groups` | Create a group and add its owner as the first member |
 | GET | `/api/groups` | List your approved groups with member counts and owner status |
+| DELETE | `/api/groups/:id/owner-notice` | Owner only: acknowledge a new-owner notice |
 | GET | `/api/groups/:id/progress?date=YYYY-MM-DD` | Members only: daily completion percentages |
 | GET | `/api/groups/:id/shared-habits` | Members only: habits explicitly shared with this group |
 | POST | `/api/groups/join` | Request to join using an invite code |
@@ -56,6 +60,7 @@ scrypt and random salts; only token hashes are stored in SQLite.
 | PUT | `/api/habits/:id` | Replace editable habit fields |
 | DELETE | `/api/habits/:id` | Delete habit and its check-ins |
 | GET | `/api/habits/:id/shares` | Habit owner only: view sharing settings for each group |
+| DELETE | `/api/habits/:id/shares` | Habit owner only: make private in all groups |
 | PUT | `/api/habits/:id/shares/:groupId` | Habit owner only: share or replace this group's sharing settings |
 | DELETE | `/api/habits/:id/shares/:groupId` | Habit owner only: stop sharing with this group |
 | PUT | `/api/habits/:id/check-ins/:date` | Check in, safely repeatable |
@@ -76,7 +81,11 @@ return 400, unknown codes return 404, and existing members (including the owner)
 receive 409 with `You’re already a member.` Joining does not share private habits.
 
 Group lists return `{groups: [{id, name, memberCount, isOwner}]}`. Only the owner
-also receives `inviteCode`. Pending requests do not count as memberships or
+also receives `inviteCode`, `pendingRequestCount`, and `ownershipChanged`.
+Ownership transfer creates a persistent notice for the new owner. Reading the
+list does not clear it; the frontend acknowledges it when opening group details
+using the owner-notice endpoint (204; nonowners receive 404). Original creators
+do not receive transfer notices. Pending requests do not count as memberships or
 appear in the applicant's group list. The frontend can use `isOwner` for a crown.
 Owners can list `{requests: [{userId, email, requestedAt}]}` and approve or reject
 each request. Both actions return 204; missing requests return 404. Nonowners
@@ -120,6 +129,8 @@ saving. An empty object shares only the name. Returns 200 with
 `{share: {groupId, shareDescription, shareSchedule, shareCheckIns}}`.
 `GET /api/habits/:id/shares` returns `{shares: [...]}` with those same settings.
 DELETE stops sharing with that group and returns 204, including repeated deletes.
+DELETE on `/api/habits/:id/shares` removes all shares for the habit in one database
+operation and returns 204. It preserves the habit and its check-in history.
 
 Group members read `{habits: [{id, userId, email, name}]}` from the shared-habits
 endpoint. Description, schedule, and checkIns are included only when their

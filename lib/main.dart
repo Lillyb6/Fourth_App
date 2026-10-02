@@ -3,6 +3,7 @@ import 'package:flutter/material.dart';
 import 'api.dart';
 import 'accountability_screen.dart';
 import 'auth_screen.dart';
+import 'habit_sharing_screen.dart';
 
 void main() => runApp(const MyApp());
 
@@ -280,6 +281,7 @@ class _HabitHomeState extends State<HabitHome> {
                                   await Navigator.of(context).push(
                                     MaterialPageRoute<void>(
                                       builder: (_) => HabitDetailsScreen(
+                                        api: widget.api,
                                         habit: habit,
                                         onToggle: () => toggle(habit),
                                       ),
@@ -453,9 +455,11 @@ class HabitDetailsScreen extends StatefulWidget {
   const HabitDetailsScreen({
     super.key,
     required this.habit,
+    required this.api,
     required this.onToggle,
   });
   final Habit habit;
+  final HabitApi api;
   final Future<void> Function() onToggle;
   @override
   State<HabitDetailsScreen> createState() => _HabitDetailsScreenState();
@@ -497,9 +501,12 @@ class _HabitDetailsScreenState extends State<HabitDetailsScreen> {
                 spacing: 8,
                 children: [
                   Chip(label: Text(habit.schedule)),
-                  const Chip(
-                    avatar: Icon(Icons.lock_outline, size: 16),
-                    label: Text('Private'),
+                  ActionChip(
+                    avatar: const Icon(Icons.shield_outlined, size: 16),
+                    label: const Text('Manage sharing'),
+                    onPressed: () => Navigator.of(context).push(MaterialPageRoute<void>(
+                      builder: (_) => HabitSharingScreen(api: widget.api, habit: habit),
+                    )),
                   ),
                 ],
               ),

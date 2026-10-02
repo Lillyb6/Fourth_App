@@ -4,6 +4,10 @@ import 'dart:convert';
 import 'package:flutter/foundation.dart';
 import 'package:http/http.dart' as http;
 
+import 'group.dart';
+import 'group_activity.dart';
+import 'habit_share.dart';
+
 DateTime day(DateTime date) => DateTime(date.year, date.month, date.day);
 String dateLabel(DateTime date) => '${date.month}/${date.day}/${date.year}';
 String apiDate(DateTime date) =>
@@ -165,10 +169,112 @@ class HabitApi extends ChangeNotifier {
     );
   }
 
+  Future<List<AccountabilityGroup>> groups() async =>
+      ((await _request('GET', '/api/groups'))['groups'] as List)
+          .map(
+            (value) =>
+                AccountabilityGroup.fromJson(value as Map<String, dynamic>),
+          )
+          .toList();
+
+  Future<List<MemberProgress>> groupProgress(
+    String groupId,
+    DateTime date,
+  ) async =>
+      ((await _request(
+                'GET',
+                '/api/groups/${Uri.encodeComponent(groupId)}/progress?date=${apiDate(date)}',
+              ))['members']
+              as List)
+          .map(
+            (value) => MemberProgress.fromJson(value as Map<String, dynamic>),
+          )
+          .toList();
+
+  Future<List<SharedHabit>> sharedHabits(String groupId) async =>
+      ((await _request(
+                'GET',
+                '/api/groups/${Uri.encodeComponent(groupId)}/shared-habits',
+              ))['habits']
+              as List)
+          .map((value) => SharedHabit.fromJson(value as Map<String, dynamic>))
+          .toList();
+
+  Future<void> acknowledgeOwnership(String groupId) async {
+    await _request(
+      'DELETE',
+      '/api/groups/${Uri.encodeComponent(groupId)}/owner-notice',
+    );
+  }
+
+  Future<List<GroupJoinRequest>> groupRequests(String groupId) async =>
+      ((await _request(
+                'GET',
+                '/api/groups/${Uri.encodeComponent(groupId)}/requests',
+              ))['requests']
+              as List)
+          .map(
+            (value) => GroupJoinRequest.fromJson(value as Map<String, dynamic>),
+          )
+          .toList();
+
+  Future<void> decideGroupRequest(
+    String groupId,
+    String userId, {
+    required bool approve,
+  }) async {
+    final path =
+        '/api/groups/${Uri.encodeComponent(groupId)}/requests/${Uri.encodeComponent(userId)}';
+    await _request(
+      approve ? 'POST' : 'DELETE',
+      approve ? '$path/approve' : path,
+    );
+  }
+
   Future<List<Habit>> habits() async =>
       ((await _request('GET', '/api/habits'))['habits'] as List)
           .map((value) => Habit.fromJson(value as Map<String, dynamic>))
           .toList();
+
+  Future<void> leaveGroup(String groupId) async {
+    await _request(
+      'DELETE',
+      '/api/groups/${Uri.encodeComponent(groupId)}/membership',
+    );
+  }
+
+  Future<Map<String, HabitShare>> habitShares(String habitId) async {
+    final data = await _request(
+      'GET',
+      '/api/habits/${Uri.encodeComponent(habitId)}/shares',
+    );
+    return {
+      for (final share in data['shares'] as List)
+        share['groupId'] as String: HabitShare.fromJson(
+          share as Map<String, dynamic>,
+        ),
+    };
+  }
+
+  Future<void> saveHabitShare(
+    String habitId,
+    String groupId,
+    HabitShare? options,
+  ) async {
+    await _request(
+      options == null ? 'DELETE' : 'PUT',
+      '/api/habits/${Uri.encodeComponent(habitId)}/shares/${Uri.encodeComponent(groupId)}',
+      body: options?.toJson(),
+    );
+  }
+
+  Future<void> makeHabitPrivate(String habitId) async {
+    await _request(
+      'DELETE',
+      '/api/habits/${Uri.encodeComponent(habitId)}/shares',
+    );
+  }
+
   Future<Habit> create(String name, String description, bool weekdays) async =>
       Habit.fromJson(
         (await _request(

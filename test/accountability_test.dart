@@ -10,8 +10,10 @@ import 'package:http/testing.dart';
 
 Future<HabitApi> openAccountability(
   WidgetTester tester,
-  Future<http.Response> Function(http.Request) handler,
-) async {
+  Future<http.Response> Function(http.Request) handler, {
+  bool handleGroups = false,
+  bool handleActivity = false,
+}) async {
   final api = HabitApi(
     client: MockClient((request) async {
       if (request.url.path == '/api/auth/login') {
@@ -21,9 +23,23 @@ Future<HabitApi> openAccountability(
       if (request.url.path == '/api/habits') {
         return http.Response('{"habits":[]}', 200);
       }
+      if (!handleGroups &&
+          request.url.path == '/api/groups' &&
+          request.method == 'GET') {
+        return http.Response('{"groups":[]}', 200);
+      }
+      if (!handleActivity && request.url.path.endsWith('/progress')) {
+        return http.Response('{"members":[]}', 200);
+      }
+      if (!handleActivity && request.url.path.endsWith('/shared-habits')) {
+        return http.Response('{"habits":[]}', 200);
+      }
       return handler(request);
     }),
   );
+  addTearDown(() async {
+    await tester.pumpWidget(const SizedBox.shrink());
+  });
   await api.authenticate('test@example.com', 'test-password');
   await tester.pumpWidget(MyApp(api: api));
   await tester.pumpAndSettle();

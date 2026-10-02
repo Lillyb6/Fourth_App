@@ -245,7 +245,7 @@ test('owners control requests and invite visibility, including after ownership t
   assert.equal((await requestJoin(second)).status, 202);
   assert.equal((await requestJoin(third)).status, 202);
   const owned = (await list(owner.token)).data.groups[0];
-  assert.deepEqual(owned, { id: group.id, name: 'Circle', memberCount: 1, isOwner: true, inviteCode: group.inviteCode });
+  assert.deepEqual(owned, { id: group.id, name: 'Circle', memberCount: 1, isOwner: true, inviteCode: group.inviteCode, pendingRequestCount: 2, ownershipChanged: false });
   assert.deepEqual((await list(outsider.token)).data.groups, []);
   assert.deepEqual((await list(second.token)).data.groups, []);
   assert.equal((await f.request(requestsPath)).status, 401);
@@ -454,4 +454,59 @@ test('shares persist, leaving revokes them, rejoining does not restore them, and
     if (db) db.close();
     rmSync(dir, { recursive: true, force: true });
   }
+});
+
+test('owner notices survive restart, clear only for the owner, and counts follow decisions', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'habitapp-notices-'));
+  const databasePath = join(dir, 'test.sqlite');
+  let f;
+  try {
+    f = await fixture({ databasePath });
+    const { owner, sharer, viewer, pending, groups } = await sharingSetup(f);
+    const group = groups[0];
+    const list = async user => (await f.request('/api/groups', { token: user.token })).data.groups.find(g => g.id === group.id);
+    assert.equal((await list(owner)).pendingRequestCount, 1);
+    assert.equal((await list(owner)).ownershipChanged, false);
+    assert.equal('pendingRequestCount' in await list(viewer), false);
+    assert.equal((await f.request(`/api/groups/${group.id}/membership`, { method: 'DELETE', token: owner.token })).status, 204);
+    await f.close(); f = null;
+    f = await fixture({ databasePath });
+    assert.equal((await list(sharer)).ownershipChanged, true);
+    assert.equal((await list(sharer)).pendingRequestCount, 1);
+    const path = `/api/groups/${group.id}/owner-notice`;
+    assert.equal((await f.request(path, { method: 'DELETE' })).status, 401);
+    for (const user of [owner, viewer, pending]) {
+      assert.equal((await f.request(path, { method: 'DELETE', token: user.token })).status, 404);
+    }
+    assert.equal((await list(sharer)).ownershipChanged, true);
+    assert.equal((await f.request(path, { method: 'DELETE', token: sharer.token })).status, 204);
+    assert.equal((await list(sharer)).ownershipChanged, false);
+    assert.equal((await list(sharer)).pendingRequestCount, 1);
+    assert.equal((await f.request(`/api/groups/${group.id}/requests/${pending.user.id}`, { method: 'DELETE', token: sharer.token })).status, 204);
+    assert.equal((await list(sharer)).pendingRequestCount, 0);
+    assert.equal((await f.request(`/api/groups/${group.id}/membership`, { method: 'DELETE', token: sharer.token })).status, 204);
+    assert.equal((await list(viewer)).ownershipChanged, true);
+  } finally {
+    if (f) await f.close();
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('make private removes all shares only for the habit owner and keeps the habit', async t => {
+  const f = await fixture(); t.after(() => f.close());
+  const { owner, sharer, groups, habit } = await sharingSetup(f);
+  const path = `/api/habits/${habit.id}/shares`;
+  for (const group of groups) {
+    assert.equal((await f.request(`${path}/${group.id}`, { method: 'PUT', token: sharer.token, body: { shareCheckIns: true } })).status, 200);
+  }
+  assert.equal((await f.request(path, { method: 'DELETE' })).status, 401);
+  assert.equal((await f.request(path, { method: 'DELETE', token: owner.token })).status, 404);
+  assert.equal((await f.request(path, { token: sharer.token })).data.shares.length, 2);
+  assert.equal((await f.request(path, { method: 'DELETE', token: sharer.token })).status, 204);
+  assert.deepEqual((await f.request(path, { token: sharer.token })).data.shares, []);
+  for (const group of groups) {
+    assert.deepEqual((await f.request(`/api/groups/${group.id}/shared-habits`, { token: owner.token })).data.habits, []);
+  }
+  assert.equal((await f.request(path, { method: 'DELETE', token: sharer.token })).status, 204);
+  assert.equal((await f.request(`/api/habits/${habit.id}`, { token: sharer.token })).data.habit.checkIns.length, 2);
 });

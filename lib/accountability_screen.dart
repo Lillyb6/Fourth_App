@@ -1,19 +1,70 @@
 import 'dart:math';
+import 'dart:async';
 
 import 'package:flutter/material.dart';
 
 import 'api.dart';
+import 'group.dart';
+import 'group_details_screen.dart';
 
-class AccountabilityScreen extends StatelessWidget {
+class AccountabilityScreen extends StatefulWidget {
   const AccountabilityScreen({super.key, required this.api});
   final HabitApi api;
 
-  void openForm(BuildContext context, {required bool creating}) {
-    showDialog<void>(
+  @override
+  State<AccountabilityScreen> createState() => _AccountabilityScreenState();
+}
+
+class _AccountabilityScreenState extends State<AccountabilityScreen> {
+  List<AccountabilityGroup> groups = [];
+  bool loading = true;
+  String? error;
+  Timer? refreshTimer;
+  bool fetching = false;
+
+  @override
+  void initState() {
+    super.initState();
+    load();
+    refreshTimer = Timer.periodic(const Duration(seconds: 10), (_) {
+      if (ModalRoute.of(context)?.isCurrent == true &&
+          WidgetsBinding.instance.lifecycleState == AppLifecycleState.resumed) {
+        load(silent: true);
+      }
+    });
+  }
+
+  @override
+  void dispose() {
+    refreshTimer?.cancel();
+    super.dispose();
+  }
+
+  Future<void> load({bool silent = false}) async {
+    if (fetching) return;
+    fetching = true;
+    setState(() {
+      if (!silent) loading = true;
+      error = null;
+    });
+    try {
+      final saved = await widget.api.groups();
+      if (mounted) setState(() => groups = saved);
+    } on ApiException catch (e) {
+      if (mounted) setState(() => error = e.message);
+    } finally {
+      fetching = false;
+      if (mounted) setState(() => loading = false);
+    }
+  }
+
+  Future<void> openForm(BuildContext context, {required bool creating}) async {
+    await showDialog<void>(
       context: context,
       barrierDismissible: false,
-      builder: (_) => _GroupForm(api: api, creating: creating),
+      builder: (_) => _GroupForm(api: widget.api, creating: creating),
     );
+    if (mounted) await load();
   }
 
   @override
@@ -50,6 +101,77 @@ class AccountabilityScreen extends StatelessWidget {
           ),
         ),
       ),
+      Row(
+        children: [
+          Expanded(
+            child: Text(
+              'Your groups',
+              style: Theme.of(context).textTheme.titleLarge,
+            ),
+          ),
+          IconButton(
+            tooltip: 'Refresh groups',
+            onPressed: loading ? null : load,
+            icon: const Icon(Icons.refresh),
+          ),
+        ],
+      ),
+      if (loading)
+        const Center(child: CircularProgressIndicator())
+      else if (error != null) ...[
+        Text(
+          error!,
+          style: TextStyle(color: Theme.of(context).colorScheme.error),
+        ),
+        TextButton(onPressed: load, child: const Text('Retry groups')),
+      ] else if (groups.isEmpty)
+        const Padding(
+          padding: EdgeInsets.symmetric(vertical: 16),
+          child: Text('You haven’t joined any groups yet.'),
+        )
+      else
+        for (final group in groups)
+          Card(
+            child: ListTile(
+              title: Text(group.name),
+              subtitle: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    '${group.memberCount} ${group.memberCount == 1 ? 'member' : 'members'}',
+                  ),
+                  if (group.isOwner && group.pendingRequestCount > 0)
+                    Text(
+                      'Action needed · ${group.pendingRequestCount} ${group.pendingRequestCount == 1 ? 'request' : 'requests'}',
+                      style: TextStyle(
+                        color: Theme.of(context).colorScheme.primary,
+                        fontWeight: FontWeight.bold,
+                      ),
+                    ),
+                  if (group.isOwner && group.ownershipChanged)
+                    Text(
+                      'You’re now the owner',
+                      style: TextStyle(
+                        color: Theme.of(context).colorScheme.primary,
+                        fontWeight: FontWeight.bold,
+                      ),
+                    ),
+                ],
+              ),
+              trailing: group.isOwner
+                  ? const Text('♛ Owner', semanticsLabel: 'Group owner')
+                  : const Icon(Icons.chevron_right),
+              onTap: () async {
+                await Navigator.of(context).push(
+                  MaterialPageRoute<void>(
+                    builder: (_) =>
+                        GroupDetailsScreen(api: widget.api, group: group),
+                  ),
+                );
+                if (mounted) await load();
+              },
+            ),
+          ),
       const ListTile(
         leading: Icon(Icons.shield_outlined),
         title: Text('You control what you share'),

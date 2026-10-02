@@ -74,6 +74,11 @@ export function createApp({ databasePath = ':memory:', sessionSeconds = 604800 }
       PRIMARY KEY (group_id, user_id)
     );
     CREATE INDEX IF NOT EXISTS group_memberships_user ON group_memberships(user_id);
+    CREATE TABLE IF NOT EXISTS group_owner_notices (
+      group_id TEXT PRIMARY KEY,
+      user_id TEXT NOT NULL,
+      FOREIGN KEY (group_id, user_id) REFERENCES group_memberships(group_id, user_id) ON DELETE CASCADE
+    );
     CREATE TABLE IF NOT EXISTS group_join_requests (
       group_id TEXT NOT NULL REFERENCES groups(id) ON DELETE CASCADE,
       user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
@@ -208,13 +213,19 @@ export function createApp({ databasePath = ':memory:', sessionSeconds = 604800 }
 
   app.get('/api/groups', (req, res) => {
     const groups = db.prepare(`SELECT groups.*,
-      (SELECT COUNT(*) FROM group_memberships WHERE group_id = groups.id) AS member_count
+      (SELECT COUNT(*) FROM group_memberships WHERE group_id = groups.id) AS member_count,
+      (SELECT COUNT(*) FROM group_join_requests WHERE group_id = groups.id) AS pending_count,
+      EXISTS(SELECT 1 FROM group_owner_notices WHERE group_id = groups.id AND user_id = groups.owner_id) AS owner_notice
       FROM groups JOIN group_memberships ON group_memberships.group_id = groups.id
       WHERE group_memberships.user_id = ? ORDER BY groups.created_at, groups.id`).all(req.user.id);
     res.json({ groups: groups.map(group => ({
       id: group.id, name: group.name, memberCount: group.member_count,
       isOwner: group.owner_id === req.user.id,
-      ...(group.owner_id === req.user.id ? { inviteCode: group.invite_code } : {}),
+      ...(group.owner_id === req.user.id ? {
+        inviteCode: group.invite_code,
+        pendingRequestCount: group.pending_count,
+        ownershipChanged: Boolean(group.owner_notice),
+      } : {}),
     })) });
   });
 
@@ -245,6 +256,11 @@ export function createApp({ databasePath = ':memory:', sessionSeconds = 604800 }
     if (!group) fail(404, 'Group not found.');
     return group;
   }
+  app.delete('/api/groups/:id/owner-notice', (req, res) => {
+    const group = ownedGroup(req);
+    db.prepare('DELETE FROM group_owner_notices WHERE group_id = ? AND user_id = ?').run(group.id, req.user.id);
+    res.sendStatus(204);
+  });
   app.get('/api/groups/:id/shared-habits', (req, res) => {
     if (!db.prepare('SELECT 1 FROM group_memberships WHERE group_id = ? AND user_id = ?').get(req.params.id, req.user.id)) {
       fail(404, 'Group not found.');
@@ -307,6 +323,8 @@ export function createApp({ databasePath = ':memory:', sessionSeconds = 604800 }
           .get(group.id, req.user.id);
         if (nextOwner) {
           db.prepare('UPDATE groups SET owner_id = ? WHERE id = ?').run(nextOwner.user_id, group.id);
+          db.prepare(`INSERT INTO group_owner_notices (group_id, user_id) VALUES (?, ?)
+            ON CONFLICT (group_id) DO UPDATE SET user_id = excluded.user_id`).run(group.id, nextOwner.user_id);
         } else {
           db.prepare('DELETE FROM groups WHERE id = ?').run(group.id);
         }
@@ -360,6 +378,11 @@ export function createApp({ databasePath = ':memory:', sessionSeconds = 604800 }
       share_check_ins = excluded.share_check_ins`)
       .run(habit.id, req.params.groupId, req.user.id, Number(options.shareDescription), Number(options.shareSchedule), Number(options.shareCheckIns));
     res.json({ share: { groupId: req.params.groupId, ...options } });
+  });
+  app.delete('/api/habits/:id/shares', (req, res) => {
+    const habit = ownedHabit(req);
+    db.prepare('DELETE FROM habit_shares WHERE habit_id = ?').run(habit.id);
+    res.sendStatus(204);
   });
   app.delete('/api/habits/:id/shares/:groupId', (req, res) => {
     const habit = ownedHabit(req);
