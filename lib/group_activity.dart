@@ -1,20 +1,45 @@
 class MemberProgress {
-  MemberProgress.fromJson(Map<String, dynamic> data)
-    : userId = data['userId'] as String,
-      email = data['email'] as String,
-      percentage = data['completionPercentage'] as int?;
-  final String userId, email;
+  const MemberProgress({
+    required this.userId,
+    required this.email,
+    this.percentage,
+  });
+  final String userId;
+  final String email;
   final int? percentage;
+
+  factory MemberProgress.fromJson(Map<String, dynamic> json) => MemberProgress(
+    userId: json['userId'] as String,
+    email: json['email'] as String,
+    percentage: json['completionPercentage'] as int?,
+  );
 }
 
 class SharedHabit {
-  SharedHabit.fromJson(Map<String, dynamic> data)
-    : name = data['name'] as String,
-      email = data['email'] as String,
-      description = data['description'] as String?,
-      schedule = data['schedule'] as String?,
-      checkIns = (data['checkIns'] as List?)?.cast<String>();
-  final String name, email;
-  final String? description, schedule;
+  const SharedHabit({
+    required this.id,
+    required this.userId,
+    required this.email,
+    required this.name,
+    this.description,
+    this.schedule,
+    this.checkIns,
+  });
+  final String id;
+  final String userId;
+  final String email;
+  final String name;
+  final String? description;
+  final String? schedule;
   final List<String>? checkIns;
+
+  factory SharedHabit.fromJson(Map<String, dynamic> json) => SharedHabit(
+    id: json['id'] as String,
+    userId: json['userId'] as String,
+    email: json['email'] as String,
+    name: json['name'] as String,
+    description: json['description'] as String?,
+    schedule: json['schedule'] as String?,
+    checkIns: (json['checkIns'] as List?)?.cast<String>(),
+  );
 }

@@ -1,80 +1,193 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 
 import 'api.dart';
 import 'group.dart';
 import 'group_activity.dart';
+import 'group_activity_section.dart';
 
 class GroupDetailsScreen extends StatefulWidget {
   const GroupDetailsScreen({super.key, required this.api, required this.group});
   final HabitApi api;
   final AccountabilityGroup group;
+
   @override
   State<GroupDetailsScreen> createState() => _GroupDetailsScreenState();
 }
 
 class _GroupDetailsScreenState extends State<GroupDetailsScreen> {
-  List<MemberProgress> members = [];
-  List<SharedHabit> habits = [];
+  AccountabilityGroup? group;
   List<GroupJoinRequest> requests = [];
-  DateTime selected = day(DateTime.now());
-  bool loading = true, busy = false;
-  late bool notice = widget.group.ownershipChanged;
+  List<MemberProgress> progress = [];
+  List<SharedHabit> sharedHabits = [];
+  bool loading = true;
+  bool deciding = false;
   String? error;
+  Timer? refreshTimer;
+  bool fetching = false;
+  DateTime? selectedDate;
+
   @override
   void initState() {
     super.initState();
     load();
+    refreshTimer = Timer.periodic(const Duration(seconds: 10), (_) {
+      if (!deciding &&
+          ModalRoute.of(context)?.isCurrent == true &&
+          WidgetsBinding.instance.lifecycleState == AppLifecycleState.resumed) {
+        load(silent: true);
+      }
+    });
   }
 
-  Future<void> load() async {
+  @override
+  void dispose() {
+    refreshTimer?.cancel();
+    super.dispose();
+  }
+
+  Future<void> load({bool silent = false}) async {
+    if (fetching) return;
+    fetching = true;
     setState(() {
-      loading = true;
+      if (!silent) {
+        loading = true;
+        group = null;
+        requests = [];
+      }
       error = null;
     });
     try {
-      final progress = await widget.api.groupProgress(
-        widget.group.id,
-        selected,
+      // Refresh ownership before requesting owner-only data.
+      final groups = await widget.api.groups();
+      final matches = groups.where((item) => item.id == widget.group.id);
+      if (matches.isEmpty) {
+        throw const ApiException(
+          'This group is no longer available to your account.',
+        );
+      }
+      final current = matches.first;
+      final memberProgress = await widget.api.groupProgress(
+        current.id,
+        selectedDate ?? DateTime.now(),
       );
-      final shared = await widget.api.sharedHabits(widget.group.id);
-      final pending = widget.group.isOwner
-          ? await widget.api.groupRequests(widget.group.id)
+      final shared = await widget.api.sharedHabits(current.id);
+      final pending = current.isOwner
+          ? await widget.api.groupRequests(current.id)
           : <GroupJoinRequest>[];
+      if (current.ownershipChanged &&
+          mounted &&
+          ModalRoute.of(context)?.isCurrent == true) {
+        await widget.api.acknowledgeOwnership(current.id);
+      }
       if (mounted) {
         setState(() {
-          members = progress;
-          habits = shared;
+          group = current;
           requests = pending;
+          progress = memberProgress;
+          sharedHabits = shared;
         });
       }
     } on ApiException catch (e) {
-      if (mounted) setState(() => error = e.message);
+      if (mounted) {
+        setState(() {
+          error = e.message;
+          group = null;
+          requests = [];
+        });
+      }
     } finally {
+      fetching = false;
       if (mounted) setState(() => loading = false);
     }
   }
 
-  Future<void> action(
-    Future<void> Function() work, {
-    bool leaving = false,
-  }) async {
-    if (busy) return;
-    setState(() {
-      busy = true;
-      error = null;
-    });
+  Future<void> decide(GroupJoinRequest request, {required bool approve}) async {
+    if (deciding || loading || fetching) return;
+    setState(() => deciding = true);
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: Text(approve ? 'Approve request?' : 'Reject request?'),
+        content: Text(
+          approve
+              ? 'Add ${request.email} to ${group!.name}?'
+              : 'Reject the request from ${request.email}?',
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context, false),
+            child: const Text('Cancel'),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.pop(context, true),
+            child: Text(approve ? 'Confirm approval' : 'Confirm rejection'),
+          ),
+        ],
+      ),
+    );
+    if (!mounted) return;
+    if (confirmed != true) {
+      setState(() => deciding = false);
+      return;
+    }
+    setState(() => error = null);
     try {
-      await work();
-      if (!mounted) return;
-      if (leaving) {
-        Navigator.pop(context);
-      } else {
-        await load();
-      }
+      await widget.api.decideGroupRequest(
+        widget.group.id,
+        request.userId,
+        approve: approve,
+      );
+      if (mounted) await load();
     } on ApiException catch (e) {
       if (mounted) setState(() => error = e.message);
     } finally {
-      if (mounted) setState(() => busy = false);
+      if (mounted) setState(() => deciding = false);
+    }
+  }
+
+  Future<void> leave() async {
+    if (deciding || fetching || group == null) return;
+    final current = group!;
+    setState(() => deciding = true);
+    final explanation = current.isOwner
+        ? (current.memberCount == 1
+              ? 'You are the only member, so this group will be deleted.'
+              : 'Ownership will transfer to the earliest remaining member.')
+        : 'You will need owner approval to join again.';
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: const Text('Leave group?'),
+        content: Text(
+          '$explanation Your habits will stop being shared with this group.',
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context, false),
+            child: const Text('Cancel'),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.pop(context, true),
+            child: const Text('Confirm leave'),
+          ),
+        ],
+      ),
+    );
+    if (!mounted) return;
+    if (confirmed != true) {
+      setState(() => deciding = false);
+      return;
+    }
+    setState(() => error = null);
+    try {
+      await widget.api.leaveGroup(current.id);
+      if (mounted) Navigator.pop(context);
+    } on ApiException catch (e) {
+      if (mounted) setState(() => error = e.message);
+    } finally {
+      if (mounted) setState(() => deciding = false);
     }
   }
 
@@ -84,8 +197,8 @@ class _GroupDetailsScreenState extends State<GroupDetailsScreen> {
       title: Text(widget.group.name),
       actions: [
         IconButton(
-          tooltip: 'Refresh group',
-          onPressed: loading || busy ? null : load,
+          tooltip: 'Refresh group details',
+          onPressed: loading || deciding ? null : load,
           icon: const Icon(Icons.refresh),
         ),
       ],
@@ -96,188 +209,124 @@ class _GroupDetailsScreenState extends State<GroupDetailsScreen> {
         child: ListView(
           padding: const EdgeInsets.all(24),
           children: [
-            if (notice && widget.group.isOwner)
-              Card(
-                child: ListTile(
-                  title: const Text('You are now the owner'),
-                  trailing: TextButton(
-                    onPressed: busy
-                        ? null
-                        : () => action(() async {
-                            await widget.api.acknowledgeOwnership(
-                              widget.group.id,
-                            );
-                            if (mounted) setState(() => notice = false);
-                          }),
-                    child: const Text('Dismiss'),
-                  ),
-                ),
-              ),
-            if (widget.group.isOwner && widget.group.inviteCode != null)
-              SelectableText('Invite code: ${widget.group.inviteCode}'),
-            const SizedBox(height: 16),
+            if (loading) const Center(child: CircularProgressIndicator()),
             if (error != null) ...[
-              Text(error!),
+              Text(
+                error!,
+                style: TextStyle(color: Theme.of(context).colorScheme.error),
+              ),
               TextButton(
-                onPressed: busy || loading ? null : load,
+                onPressed: loading || deciding ? null : load,
                 child: const Text('Retry'),
               ),
             ],
-            if (loading)
-              const Center(child: CircularProgressIndicator())
-            else ...[
-              if (widget.group.isOwner) ...[
-                Text(
-                  'Join requests',
+            if (!loading && group != null) ...[
+              Align(
+                alignment: Alignment.centerLeft,
+                child: OutlinedButton.icon(
+                  onPressed: deciding || fetching ? null : leave,
+                  icon: const Icon(Icons.exit_to_app),
+                  label: const Text('Leave group'),
+                ),
+              ),
+              const SizedBox(height: 16),
+              Text(
+                '${group!.memberCount} ${group!.memberCount == 1 ? 'member' : 'members'}',
+              ),
+              const SizedBox(height: 16),
+              Row(
+                children: [
+                  TextButton.icon(
+                    icon: const Icon(Icons.calendar_month),
+                    label: Text(dateLabel(selectedDate ?? DateTime.now())),
+                    onPressed: deciding || fetching
+                        ? null
+                        : () async {
+                            final date = await showDatePicker(
+                              context: context,
+                              initialDate: selectedDate ?? day(DateTime.now()),
+                              firstDate: DateTime(2000),
+                              lastDate: DateTime.now(),
+                            );
+                            if (date != null && mounted) {
+                              setState(() => selectedDate = date);
+                              await load();
+                            }
+                          },
+                  ),
+                  if (selectedDate != null)
+                    TextButton(
+                      onPressed: deciding || fetching
+                          ? null
+                          : () {
+                              setState(() => selectedDate = null);
+                              load();
+                            },
+                      child: const Text('Today'),
+                    ),
+                ],
+              ),
+              GroupActivitySection(
+                members: progress,
+                habits: sharedHabits,
+                title: selectedDate == null
+                    ? 'Today’s group progress'
+                    : 'Group progress',
+                periodLabel: selectedDate == null
+                    ? 'today'
+                    : 'on the selected date',
+              ),
+              if (group!.isOwner) ...[
+                const SizedBox(height: 12),
+                const Text('♛ Owner', semanticsLabel: 'Group owner'),
+                const SizedBox(height: 16),
+                const Text('Invite code'),
+                SelectableText(
+                  group!.inviteCode ?? '',
                   style: Theme.of(context).textTheme.titleLarge,
                 ),
-                if (requests.isEmpty) const Text('No pending requests.'),
+                const SizedBox(height: 24),
+                Text(
+                  'Pending requests',
+                  style: Theme.of(context).textTheme.titleLarge,
+                ),
+                if (requests.isEmpty)
+                  const Padding(
+                    padding: EdgeInsets.symmetric(vertical: 16),
+                    child: Text('No pending requests.'),
+                  ),
                 for (final request in requests)
                   Card(
-                    child: ListTile(
-                      title: Text(request.email),
-                      subtitle: Wrap(
-                        spacing: 8,
+                    child: Padding(
+                      padding: const EdgeInsets.all(16),
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
                         children: [
-                          TextButton(
-                            onPressed: busy
-                                ? null
-                                : () => action(
-                                    () => widget.api.decideGroupRequest(
-                                      widget.group.id,
-                                      request.userId,
-                                      approve: true,
-                                    ),
-                                  ),
-                            child: const Text('Approve'),
-                          ),
-                          TextButton(
-                            onPressed: busy
-                                ? null
-                                : () => action(
-                                    () => widget.api.decideGroupRequest(
-                                      widget.group.id,
-                                      request.userId,
-                                      approve: false,
-                                    ),
-                                  ),
-                            child: const Text('Decline'),
+                          Text(request.email),
+                          const SizedBox(height: 8),
+                          Wrap(
+                            spacing: 12,
+                            children: [
+                              FilledButton(
+                                onPressed: deciding || fetching
+                                    ? null
+                                    : () => decide(request, approve: true),
+                                child: const Text('Approve'),
+                              ),
+                              OutlinedButton(
+                                onPressed: deciding || fetching
+                                    ? null
+                                    : () => decide(request, approve: false),
+                                child: const Text('Reject'),
+                              ),
+                            ],
                           ),
                         ],
                       ),
                     ),
                   ),
-                const SizedBox(height: 24),
               ],
-              Text(
-                'Group progress',
-                style: Theme.of(context).textTheme.titleLarge,
-              ),
-              TextButton.icon(
-                icon: const Icon(Icons.calendar_month),
-                label: Text(dateLabel(selected)),
-                onPressed: busy
-                    ? null
-                    : () async {
-                        final date = await showDatePicker(
-                          context: context,
-                          initialDate: selected,
-                          firstDate: DateTime(2000),
-                          lastDate: DateTime.now(),
-                        );
-                        if (date != null && mounted) {
-                          setState(() => selected = date);
-                          load();
-                        }
-                      },
-              ),
-              for (final member in members)
-                ListTile(
-                  title: Text(member.email),
-                  subtitle: Text(
-                    member.percentage == null
-                        ? 'No habits scheduled'
-                        : '${member.percentage}% complete',
-                  ),
-                ),
-              const SizedBox(height: 24),
-              Text(
-                'Shared habits',
-                style: Theme.of(context).textTheme.titleLarge,
-              ),
-              const Text(
-                'Only details each member chose to share appear here.',
-              ),
-              if (habits.isEmpty)
-                const Padding(
-                  padding: EdgeInsets.symmetric(vertical: 16),
-                  child: Text('No habits shared yet.'),
-                ),
-              for (final habit in habits)
-                Card(
-                  child: Padding(
-                    padding: const EdgeInsets.all(16),
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        Text(
-                          habit.name,
-                          style: Theme.of(context).textTheme.titleMedium,
-                        ),
-                        Text(habit.email),
-                        if (habit.description != null) Text(habit.description!),
-                        if (habit.schedule != null)
-                          Text(
-                            habit.schedule == 'weekdays'
-                                ? 'Weekdays'
-                                : 'Every day',
-                          ),
-                        if (habit.checkIns != null)
-                          Text(
-                            habit.checkIns!.isEmpty
-                                ? 'No check-ins yet.'
-                                : 'Check-ins: ${habit.checkIns!.join(', ')}',
-                          ),
-                      ],
-                    ),
-                  ),
-                ),
             ],
-            const SizedBox(height: 24),
-            OutlinedButton(
-              onPressed: busy || loading
-                  ? null
-                  : () async {
-                      final leave = await showDialog<bool>(
-                        context: context,
-                        builder: (context) => AlertDialog(
-                          title: const Text('Leave this group?'),
-                          content: Text(
-                            widget.group.isOwner
-                                ? 'Ownership will pass to the next member. If you are the last member, the group will be deleted.'
-                                : 'Your habit sharing with this group will stop.',
-                          ),
-                          actions: [
-                            TextButton(
-                              onPressed: () => Navigator.pop(context, false),
-                              child: const Text('Cancel'),
-                            ),
-                            FilledButton(
-                              onPressed: () => Navigator.pop(context, true),
-                              child: const Text('Leave group'),
-                            ),
-                          ],
-                        ),
-                      );
-                      if (leave == true && mounted) {
-                        action(
-                          () => widget.api.leaveGroup(widget.group.id),
-                          leaving: true,
-                        );
-                      }
-                    },
-              child: const Text('Leave group'),
-            ),
           ],
         ),
       ),
