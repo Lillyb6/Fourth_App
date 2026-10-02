@@ -3,6 +3,7 @@ import 'package:flutter/material.dart';
 import 'api.dart';
 import 'accountability_screen.dart';
 import 'branding.dart';
+import 'dashboard_header.dart';
 import 'berry_theme.dart';
 import 'progress_screen.dart';
 import 'journal_screen.dart';
@@ -179,20 +180,7 @@ class _HabitHomeState extends State<HabitHome> {
               : ListView(
                   padding: const EdgeInsets.all(24),
                   children: [
-                    Text(
-                      dateLabel(today),
-                      style: Theme.of(context).textTheme.labelLarge,
-                    ),
-                    const SizedBox(height: 8),
-                    Text(
-                      'Small steps. Real progress.',
-                      style: Theme.of(context).textTheme.headlineMedium,
-                    ),
-                    const SizedBox(height: 8),
-                    const Text(
-                      'Make a little time for the things that matter.',
-                    ),
-                    const SizedBox(height: 24),
+                    DashboardHeader(today: today),
                     Card(
                       color: Theme.of(context).colorScheme.primaryContainer,
                       child: Padding(
